@@ -7,6 +7,7 @@ import (
 	// Some imports use an underscore to prevent the compiler from complaining
 	// about unused imports.
 	_ "encoding/hex"
+	"errors"
 	_ "errors"
 	_ "strconv"
 	_ "strings"
@@ -89,10 +90,32 @@ var _ = Describe("Client Tests", func() {
 			userlib.DebugMsg("Initializing user Alice.")
 			alice, err = client.InitUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
+			Expect(alice.Username).To(Equal("alice"))
 
 			userlib.DebugMsg("Getting user Alice.")
 			aliceLaptop, err = client.GetUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
+			Expect(aliceLaptop.Username).To(Equal("alice"))
+		})
+
+		Specify("Edge Test: Testing InitUser/GetUser on a single user with zero length password.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", emptyString)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Getting user Alice.")
+			aliceLaptop, err = client.GetUser("alice", emptyString)
+			Expect(err).To(BeNil())
+		})
+
+		Specify("Basic Test: Testing wrong password while login.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Getting user Alice.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword+"1")
+			Expect(err).To(Equal(errors.New("An error occurred while verifying user identity: password incorrect.")))
 		})
 
 		Specify("Basic Test: Testing Single User Store/Load/Append.", func() {

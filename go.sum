@@ -3,6 +3,8 @@ github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e/go.mod h1:nSuG5e5P
 github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1/go.mod h1:Q3SI9o4m/ZMnBNeIyt5eFwwo7qiLfzFZmjNmxjkiQlU=
 github.com/cs161-staff/project2-userlib v0.4.0 h1:kE4klblJ4Zq+BfCwG97soJDH3MgwjD/hXwHZWgbtqMc=
 github.com/cs161-staff/project2-userlib v0.4.0/go.mod h1:lgFIBPmBUg09wLu1+Zu74rWTg1U21QC7Q7v6DlcEDFU=
+github.com/cs161-staff/project2-userlib v0.4.1 h1:/uNXzMMr1VMm53mptD3XILsDFB7rwWdNS+gwRZYM+Ds=
+github.com/cs161-staff/project2-userlib v0.4.1/go.mod h1:lgFIBPmBUg09wLu1+Zu74rWTg1U21QC7Q7v6DlcEDFU=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=

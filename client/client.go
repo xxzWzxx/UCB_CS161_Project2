@@ -142,6 +142,32 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 		VerifyKey    userlib.DSVerifyKey
 		PublicEncKey userlib.PKEEncKey
 	)
+	// Return error when empty username is provided
+	if len(username) == 0 {
+		err = errors.New("An error occurred when creating user: Empty username is provided.")
+		return nil, err
+	}
+
+	// Generate UUIDs
+	userUUID, err := GetUserUUID(username)
+	if err != nil {
+		return nil, err
+	}
+	identityUUID, err := GetIdentityUUID(username)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate keys to store sign key and verify key
+	encKeyName := getEncKeyName(username)
+	verifyKeyName := getVerifyKeyName(username)
+
+	// If the user already exists, return an error
+	_, ok := userlib.KeystoreGet(encKeyName)
+	if ok {
+		err = errors.New("An error occurred when creating user: The username already exists.")
+		return nil, err
+	}
 
 	// Initialize the user structure
 	userdata.Username = username
@@ -173,17 +199,13 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	}
 	userIdentity.Salt = salt
 
-	// Generate UUIDs
-	userUUID, err := getUserUUID(username)
-	identityUUID, err := getIdentityUUID(username)
-
 	// Store the public encryption key and sign key
-	err = userlib.KeystoreSet(getEncKeyName(username), PublicEncKey)
+	err = userlib.KeystoreSet(encKeyName, PublicEncKey)
 	if err != nil {
 		err = errors.New("An error occurred when store public encryption key to KeyStore" + err.Error())
 		return nil, err
 	}
-	err = userlib.KeystoreSet(getVerifyKeyName(username), VerifyKey)
+	err = userlib.KeystoreSet(verifyKeyName, VerifyKey)
 	if err != nil {
 		err = errors.New("An error occurred when store verify key to Key Store" + err.Error())
 		return nil, err
@@ -228,7 +250,7 @@ func getVerifyKeyName(username string) string {
 	return result
 }
 
-func getUserUUID(username string) (userUUID userlib.UUID, err error) {
+func GetUserUUID(username string) (userUUID userlib.UUID, err error) {
 	// Creates a UUID deterministically, from a sequence of bytes.
 	hash := userlib.Hash([]byte("user-struct/" + username))
 	userUUID, err = uuid.FromBytes(hash[:16])
@@ -238,7 +260,7 @@ func getUserUUID(username string) (userUUID userlib.UUID, err error) {
 	return userUUID, err
 }
 
-func getIdentityUUID(username string) (userUUID userlib.UUID, err error) {
+func GetIdentityUUID(username string) (userUUID userlib.UUID, err error) {
 	// Creates a UUID deterministically, from a sequence of bytes.
 	hash := userlib.Hash([]byte("user-identity/" + username))
 	userUUID, err = uuid.FromBytes(hash[:16])
@@ -253,29 +275,30 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	userdataptr = &userdata
 
 	// Generate UUIDs for user's identity and structure
-	userUUID, err := getUserUUID(username)
+	userUUID, err := GetUserUUID(username)
 	if err != nil {
 		return nil, err
 	}
-	identityUUID, err := getIdentityUUID(username)
+	identityUUID, err := GetIdentityUUID(username)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get user identity from Datastore and verify it
-	sig_identity, err := loadDatastore(identityUUID)
-	if err != nil {
-		return nil, err
-	}
 	verificationKey, ok := userlib.KeystoreGet(getVerifyKeyName(username))
 	if !ok {
-		err = errors.New("An error occurred while downloading data from Datastore: cannot find user's verification key.")
+		err = errors.New("An error occurred while login: The user is not initialized.")
+		return nil, err
+	}
+	sig_identity, err := loadDatastore(identityUUID)
+	if err != nil {
 		return nil, err
 	}
 	sig := sig_identity[:sigLength]
 	userIdentityBytes := sig_identity[sigLength:]
 	err = userlib.DSVerify(verificationKey, userlib.Hash(userIdentityBytes), sig)
 	if err != nil {
+		err = errors.New("An error occurred while login: cannot verify user identity due to malicious action.")
 		return nil, err
 	}
 	var userIdentity Identity
@@ -291,7 +314,7 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		return nil, err
 	}
 	if !userlib.HMACEqual(identityNew, userIdentity.IdentityKey) {
-		err = errors.New("An error occurred while verifying user identity: password incorrect.")
+		err = errors.New("An error occurred while login: password incorrect.")
 		return nil, err
 	}
 	structEncKey, err := generateSymKey(sourceKey, "structEncKey", userlib.AESKeySizeBytes)
@@ -315,7 +338,7 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		return nil, err
 	}
 	if !userlib.HMACEqual(macNew, mac) {
-		err = errors.New("An error occurred while checking the MAC value: the content is tampered.")
+		err = errors.New("An error occurred while login: the user structure is tampered.")
 		return nil, err
 	}
 	userStructBytes := userlib.SymDec(structEncKey, cipherStruct)
@@ -327,6 +350,18 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	userdataptr.structEncKey = structEncKey
 	userdataptr.structMacKey = structMacKey
 	return userdataptr, nil
+}
+
+func CompareBytes(a []byte, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func loadDatastore(key userlib.UUID) (value []byte, err error) {

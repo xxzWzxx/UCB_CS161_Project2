@@ -7,6 +7,7 @@ import (
 	// Some imports use an underscore to prevent the compiler from complaining
 	// about unused imports.
 	_ "encoding/hex"
+	"encoding/json"
 	"errors"
 	_ "errors"
 	_ "strconv"
@@ -98,24 +99,102 @@ var _ = Describe("Client Tests", func() {
 			Expect(aliceLaptop.Username).To(Equal("alice"))
 		})
 
-		Specify("Edge Test: Testing InitUser/GetUser on a single user with zero length password.", func() {
+		Specify("Basic Test: Testing InitUser/GetUser get same structure value for Alice.", func() {
 			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+			Expect(alice.Username).To(Equal("alice"))
+
+			userlib.DebugMsg("Getting user Alice.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+			Expect(aliceLaptop.Username).To(Equal("alice"))
+
+			userlib.DebugMsg("Compare Alice and AliceLaptop")
+			aliceBytes, err := json.Marshal(*alice)
+			Expect(err).To(BeNil())
+			aliceLaptopBytes, err := json.Marshal(*aliceLaptop)
+			Expect(err).To(BeNil())
+			sameFields := client.CompareBytes(aliceBytes, aliceLaptopBytes)
+			Expect(sameFields).To(Equal(true))
+		})
+
+		Specify("Edge Test: Testing InitUser/GetUser on a single user with zero length password.", func() {
+			userlib.DebugMsg("Initializing user Alice with empty password.")
 			alice, err = client.InitUser("alice", emptyString)
 			Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Getting user Alice.")
+			userlib.DebugMsg("Getting user Alice with empty password.")
 			aliceLaptop, err = client.GetUser("alice", emptyString)
 			Expect(err).To(BeNil())
 		})
 
-		Specify("Basic Test: Testing wrong password while login.", func() {
+		Specify("Edge Test: Testing empty username for InitUser.", func() {
+			userlib.DebugMsg("Initializing user with empty username.")
+			alice, err = client.InitUser(emptyString, defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred when creating user: Empty username is provided.")))
+		})
+
+		Specify("Edge Test: Testing existing username for InitUser.", func() {
 			userlib.DebugMsg("Initializing user Alice.")
 			alice, err = client.InitUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Getting user Alice.")
+			userlib.DebugMsg("Create another user Alice with the same username.")
+			_, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred when creating user: The username already exists.")))
+		})
+
+		Specify("Baic Test: Testing wrong password for GetUser.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Providing wrong password to login in as Alice.")
 			aliceLaptop, err = client.GetUser("alice", defaultPassword+"1")
-			Expect(err).To(Equal(errors.New("An error occurred while verifying user identity: password incorrect.")))
+			Expect(err).To(Equal(errors.New("An error occurred while login: password incorrect.")))
+		})
+
+		Specify("Edge Test: Testing uninitialized user for GetUser.", func() {
+			userlib.DebugMsg("Trying to login with uninitialized user alice.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred while login: The user is not initialized.")))
+		})
+
+		Specify("Edge Test: Testing tampered identity structure.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering Alice's identity without generate new signature.")
+			identityUUID, err := client.GetIdentityUUID("alice")
+			Expect(err).To(BeNil())
+			identityBytes, ok := userlib.DatastoreGet(identityUUID)
+			Expect(ok).To(Equal(true))
+			identityBytes[len(identityBytes)/2] = identityBytes[len(identityBytes)/2] + 1
+			userlib.DatastoreSet(identityUUID, identityBytes)
+
+			userlib.DebugMsg("Trying to login after tampering Alice's identity.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred while login: cannot verify user identity due to malicious action.")))
+		})
+
+		Specify("Edge Test: Testing tampered user structure.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering Alice's user structure without generate new signature.")
+			userUUID, err := client.GetUserUUID("alice")
+			Expect(err).To(BeNil())
+			userBytes, ok := userlib.DatastoreGet(userUUID)
+			Expect(ok).To(Equal(true))
+			userBytes[len(userBytes)/2] = userBytes[len(userBytes)/2] + 1
+			userlib.DatastoreSet(userUUID, userBytes)
+
+			userlib.DebugMsg("Trying to login with after tampering Alice's user structure.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred while login: the user structure is tampered.")))
 		})
 
 		Specify("Basic Test: Testing Single User Store/Load/Append.", func() {

@@ -228,19 +228,30 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	if err != nil {
 		return nil, err
 	}
-	iv := userlib.RandomBytes(userlib.AESKeySizeBytes)
-	cipherStruct := userlib.SymEnc(userdata.structEncKey, iv, userStructBytes)
-	mac, err := userlib.HMACEval(userdata.structMacKey, cipherStruct)
+	mac_value_pair, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
 	if err != nil {
 		return nil, err
 	}
-	mac_value_pair := append(mac, cipherStruct...)
 	userlib.DatastoreSet(userUUID, mac_value_pair)
 
 	return &userdata, nil
 }
 
+func encThenMac(msg []byte, encKey []byte, macKey []byte) (macCipherMsg []byte, err error) {
+	// Encrypt the `msg` with `encKey` in symmetric encryption scheme and use the `macKey` to authenticate it
+	// Return the cihper text along with MAC in the for MAC||CipherText
+	iv := userlib.RandomBytes(userlib.AESKeySizeBytes)
+	cipherMsg := userlib.SymEnc(encKey, iv, msg)
+	mac, err := userlib.HMACEval(macKey, cipherMsg)
+	if err != nil {
+		return nil, err
+	}
+	macCipherMsg = append(mac, cipherMsg...)
+	return macCipherMsg, nil
+}
+
 func getEncKeyName(username string) string {
+	// Get the key for storing public encryption key pair
 	result := fmt.Sprintf("EncKey/%s", username)
 	return result
 }

@@ -14,7 +14,6 @@ import (
 	// hex.EncodeToString(...) is useful for converting []byte to string
 
 	// Useful for string manipulation
-	"strings"
 
 	// Useful for formatting strings (e.g. `fmt.Sprintf`).
 	"fmt"
@@ -370,7 +369,7 @@ func AuthenticateMac(mac_data []byte, macKey []byte) (err error) {
 		return err
 	}
 	if !userlib.HMACEqual(macNew, mac) {
-		err = errors.New("An error occurred while login: the user structure is tampered.")
+		err = errors.New("An error occurred while authenticating the data: the data is tampered.")
 		return err
 	}
 	return nil
@@ -382,7 +381,7 @@ func VerifySig(sig_data []byte, verifyKey userlib.DSVerifyKey) (err error) {
 	data := sig_data[sigLength:]
 	err = userlib.DSVerify(verifyKey, userlib.Hash(data), sig)
 	if err != nil {
-		err = errors.New("An error occurred while login: cannot verify user identity due to malicious action.")
+		err = errors.New("An error occurred while verifying data: the data is tampered.")
 		return err
 	}
 	return nil
@@ -430,10 +429,39 @@ func GetContentUUID(username string, filename string) (contentUUID userlib.UUID,
 }
 
 type fileHeader struct {
-	HashFileName []byte       // Hash value of the file name
-	Owner        bool         // Indicate whether the owner of this header is the owner of source file
-	SourceHeader userlib.UUID // File header of the source of current header
-	ShareWith    []string     // Username the file is shared with
+	HashFileName   []byte       // Hash value of the file name
+	Owner          bool         // Indicate whether the owner of this header is the owner of source file
+	SourceHeader   userlib.UUID // File header of the source of current header
+	ShareWith      []string     // Username the file is shared with
+	SourceUserName string       // Username of the owner of source header
+}
+
+func findSourceContentUUID(headerptr *fileHeader) (contentUUID userlib.UUID, err error) {
+	currentHeader := *headerptr
+	for {
+		if currentHeader.Owner {
+			break
+		}
+		sig_nextHeader, err := loadDatastore(currentHeader.SourceHeader)
+		if err != nil {
+			return currentHeader.SourceHeader, err
+		}
+		verificationKey, ok := userlib.KeystoreGet(getVerifyKeyName(currentHeader.SourceUserName))
+		if !ok {
+			err = errors.New("An error occurred while login: The user is not initialized.")
+			return currentHeader.SourceHeader, err
+		}
+		err = VerifySig(sig_nextHeader, verificationKey)
+		if err != nil {
+			return currentHeader.SourceHeader, err
+		}
+		err = json.Unmarshal(sig_nextHeader[sigLength:], &currentHeader)
+		if err != nil {
+			return currentHeader.SourceHeader, err
+		}
+	}
+	contentUUID = currentHeader.SourceHeader
+	return contentUUID, nil
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
@@ -442,10 +470,10 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	// headerUUID, err := GetHeaderUUID(userdata.Username, filename)
-	// if err != nil {
-	// 	return err
-	// }
+	headerUUID, err := GetHeaderUUID(userdata.Username, filename)
+	if err != nil {
+		return err
+	}
 
 	// Check whether we have the file storage
 	exist := false
@@ -458,6 +486,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	var (
 		encKey []byte
 		macKey []byte
+		header fileHeader
 	)
 	if !exist {
 		encKey, err = generateSymKey(userdata.sourceKey, userdata.Username+filename+"Enc", userlib.AESKeySizeBytes)
@@ -470,27 +499,66 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 		userdata.EncKeys[filename] = encKey
 		userdata.MacKeys[filename] = macKey
+
+		// Create header
+		header.HashFileName = userlib.Hash([]byte(filename))
+		header.Owner = true
+		header.SourceHeader = contentUUID
+		header.ShareWith = make([]string, 0)
+		header.SourceUserName = userdata.Username
 	} else {
 		encKey, _ = userdata.EncKeys[filename]
 		macKey, _ = userdata.MacKeys[filename]
 
-		// Check whether there is malicious action
+		// Authenticate the content stored
 		content_stored, err := loadDatastore(contentUUID)
 		if err != nil {
 			return err
 		}
-		// Authenticate the content stored
 		err = AuthenticateMac(content_stored, macKey)
 		if err != nil {
 			return err
 		}
 
-		// header_stored, err := loadDatastore(headerUUID)
-		// if err != nil {
-		// 	return err
-		// }
-
+		// Verify the header stored
+		sig_header, err := loadDatastore(headerUUID)
+		if err != nil {
+			return err
+		}
+		verificationKey, _ := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+		err = VerifySig(sig_header, verificationKey)
+		if err != nil {
+			return err
+		}
+		err = json.Unmarshal(sig_header[sigLength:], &header)
+		// If the current user is not the owner of the file, find the true content UUID
+		if err != nil {
+			return err
+		}
+		contentUUID, err = findSourceContentUUID(&header)
+		if err != nil {
+			return err
+		}
 	}
+
+	// Encrypt then authenticate the file content, store it to Datastore
+	mac_cipher, err := encThenMac(content, encKey, macKey)
+	if err != nil {
+		return err
+	}
+	// msg := fmt.Sprintf("Storage: MAC key is %v, Encryption key is %v", macKey, encKey)
+	// userlib.DebugMsg(msg)
+	userlib.DatastoreSet(contentUUID, mac_cipher)
+	// userlib.DebugMsg("Storage: Content UUID is " + contentUUID.String())
+
+	// Store the file header to Datastore
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+	sig_header, err := getSignedMsg(headerBytes, userdata.SignKey)
+	userlib.DatastoreSet(headerUUID, sig_header)
+
 	return nil
 }
 
@@ -499,16 +567,53 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 }
 
 func (userdata *User) LoadFile(filename string) (content []byte, err error) {
-	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+	var header fileHeader
+	headerUUID, err := GetHeaderUUID(userdata.Username, filename)
+	verifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+	if !ok {
+		return nil, err
+	}
+
+	sig_headerBytes, ok := userlib.DatastoreGet(headerUUID)
+	if !ok {
+		err = errors.New("An error occurred while loading file: cannot get file due to some malicious actions.")
+		return nil, err
+	}
+	err = VerifySig(sig_headerBytes, verifyKey)
 	if err != nil {
 		return nil, err
 	}
-	dataJSON, ok := userlib.DatastoreGet(storageKey)
-	if !ok {
-		return nil, errors.New(strings.ToTitle("file not found"))
+	err = json.Unmarshal(sig_headerBytes[sigLength:], &header)
+	if err != nil {
+		return nil, err
 	}
-	err = json.Unmarshal(dataJSON, &content)
-	return content, err
+
+	contentUUID, err := findSourceContentUUID(&header)
+	// userlib.DebugMsg("Load: Content UUID is " + contentUUID.String())
+	if err != nil {
+		return nil, err
+	}
+	mac_cipher, ok := userlib.DatastoreGet(contentUUID)
+	if !ok {
+		err = errors.New("An error occurred while loading file: cannot get file due to some malicious actions.")
+		return nil, err
+	}
+	macKey, ok := userdata.MacKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while loading file: the file does not exist.")
+		return nil, err
+	}
+	err = AuthenticateMac(mac_cipher, macKey)
+	if err != nil {
+		return
+	}
+	cipher := mac_cipher[macLength:]
+	content = userlib.SymDec(userdata.EncKeys[filename], cipher)
+	if err != nil {
+		return nil, err
+	}
+
+	return content, nil
 }
 
 func (userdata *User) CreateInvitation(filename string, recipientUsername string) (

@@ -133,8 +133,6 @@ func generateSymKey(sourceKey []byte, purpose string, keySize int) (newKey []byt
 	return newKey[:keySize], nil
 }
 
-// NOTE: The following methods have toy (insecure!) implementations.
-
 func InitUser(username string, password string) (userdataptr *User, err error) {
 	var (
 		userdata     User
@@ -159,7 +157,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	}
 
 	// Generate keys to store sign key and verify key
-	encKeyName := getEncKeyName(username)
+	encKeyName := getPEKeyName(username)
 	verifyKeyName := getVerifyKeyName(username)
 
 	// If the user already exists, return an error
@@ -216,11 +214,10 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	if err != nil {
 		return nil, err
 	}
-	signature, err := userlib.DSSign(userdata.SignKey, userlib.Hash(userIdentityBytes))
+	sig_value_pair, err := getSignedMsg(userIdentityBytes, userdata.SignKey)
 	if err != nil {
 		return nil, err
 	}
-	sig_value_pair := append(signature, userIdentityBytes...)
 	userlib.DatastoreSet(identityUUID, sig_value_pair)
 
 	// Encrypt, MAC and store the user structure
@@ -250,7 +247,16 @@ func encThenMac(msg []byte, encKey []byte, macKey []byte) (macCipherMsg []byte, 
 	return macCipherMsg, nil
 }
 
-func getEncKeyName(username string) string {
+func getSignedMsg(msg []byte, signKey userlib.PrivateKeyType) (sigMsg []byte, err error) {
+	signature, err := userlib.DSSign(signKey, userlib.Hash(msg))
+	if err != nil {
+		return nil, err
+	}
+	sig_value_pair := append(signature, msg...)
+	return sig_value_pair, nil
+}
+
+func getPEKeyName(username string) string {
 	// Get the key for storing public encryption key pair
 	result := fmt.Sprintf("EncKey/%s", username)
 	return result
@@ -305,13 +311,11 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	if err != nil {
 		return nil, err
 	}
-	sig := sig_identity[:sigLength]
-	userIdentityBytes := sig_identity[sigLength:]
-	err = userlib.DSVerify(verificationKey, userlib.Hash(userIdentityBytes), sig)
+	err = VerifySig(sig_identity, verificationKey)
 	if err != nil {
-		err = errors.New("An error occurred while login: cannot verify user identity due to malicious action.")
 		return nil, err
 	}
+	userIdentityBytes := sig_identity[sigLength:]
 	var userIdentity Identity
 	err = json.Unmarshal(userIdentityBytes, &userIdentity)
 	if err != nil {
@@ -342,16 +346,11 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	if err != nil {
 		return nil, err
 	}
-	mac := mac_userStruct[:macLength]
-	cipherStruct := mac_userStruct[macLength:]
-	macNew, err := userlib.HMACEval(structMacKey, cipherStruct)
+	err = AuthenticateMac(mac_userStruct, structMacKey)
 	if err != nil {
 		return nil, err
 	}
-	if !userlib.HMACEqual(macNew, mac) {
-		err = errors.New("An error occurred while login: the user structure is tampered.")
-		return nil, err
-	}
+	cipherStruct := mac_userStruct[macLength:]
 	userStructBytes := userlib.SymDec(structEncKey, cipherStruct)
 	err = json.Unmarshal(userStructBytes, userdataptr)
 	if err != nil {
@@ -361,6 +360,32 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	userdataptr.structEncKey = structEncKey
 	userdataptr.structMacKey = structMacKey
 	return userdataptr, nil
+}
+
+func AuthenticateMac(mac_data []byte, macKey []byte) (err error) {
+	mac := mac_data[:macLength]
+	data := mac_data[macLength:]
+	macNew, err := userlib.HMACEval(macKey, data)
+	if err != nil {
+		return err
+	}
+	if !userlib.HMACEqual(macNew, mac) {
+		err = errors.New("An error occurred while login: the user structure is tampered.")
+		return err
+	}
+	return nil
+}
+
+func VerifySig(sig_data []byte, verifyKey userlib.DSVerifyKey) (err error) {
+	// Verify data with signature in the form signature||data
+	sig := sig_data[:sigLength]
+	data := sig_data[sigLength:]
+	err = userlib.DSVerify(verifyKey, userlib.Hash(data), sig)
+	if err != nil {
+		err = errors.New("An error occurred while login: cannot verify user identity due to malicious action.")
+		return err
+	}
+	return nil
 }
 
 func CompareBytes(a []byte, b []byte) bool {
@@ -384,17 +409,89 @@ func loadDatastore(key userlib.UUID) (value []byte, err error) {
 	return value, nil
 }
 
+func GetHeaderUUID(username string, filename string) (headerUUID userlib.UUID, err error) {
+	// Creates a UUID deterministically, from a sequence of bytes.
+	hash := userlib.Hash([]byte("file-header/" + username))
+	headerUUID, err = uuid.FromBytes(hash[:16])
+	if err != nil {
+		err = errors.New("An error occurred while generating file header UUID: " + err.Error())
+	}
+	return headerUUID, err
+}
+
+func GetContentUUID(username string, filename string) (contentUUID userlib.UUID, err error) {
+	// Creates a UUID deterministically, from a sequence of bytes.
+	hash := userlib.Hash([]byte("file-content/" + username))
+	contentUUID, err = uuid.FromBytes(hash[:16])
+	if err != nil {
+		err = errors.New("An error occurred while generating file content UUID: " + err.Error())
+	}
+	return contentUUID, err
+}
+
+type fileHeader struct {
+	HashFileName []byte       // Hash value of the file name
+	Owner        bool         // Indicate whether the owner of this header is the owner of source file
+	SourceHeader userlib.UUID // File header of the source of current header
+	ShareWith    []string     // Username the file is shared with
+}
+
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
-	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+	// Generate UUIDs for file header and file content
+	contentUUID, err := GetContentUUID(userdata.Username, filename)
 	if err != nil {
 		return err
 	}
-	contentBytes, err := json.Marshal(content)
-	if err != nil {
-		return err
+	// headerUUID, err := GetHeaderUUID(userdata.Username, filename)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// Check whether we have the file storage
+	exist := false
+	_, ok := userdata.EncKeys[filename]
+	if ok {
+		exist = true
 	}
-	userlib.DatastoreSet(storageKey, contentBytes)
-	return
+
+	// Get the MAC key and symmetric encryption key
+	var (
+		encKey []byte
+		macKey []byte
+	)
+	if !exist {
+		encKey, err = generateSymKey(userdata.sourceKey, userdata.Username+filename+"Enc", userlib.AESKeySizeBytes)
+		if err != nil {
+			return err
+		}
+		macKey, err = generateSymKey(userdata.sourceKey, userdata.Username+filename+"MAC", userlib.AESKeySizeBytes)
+		if err != nil {
+			return err
+		}
+		userdata.EncKeys[filename] = encKey
+		userdata.MacKeys[filename] = macKey
+	} else {
+		encKey, _ = userdata.EncKeys[filename]
+		macKey, _ = userdata.MacKeys[filename]
+
+		// Check whether there is malicious action
+		content_stored, err := loadDatastore(contentUUID)
+		if err != nil {
+			return err
+		}
+		// Authenticate the content stored
+		err = AuthenticateMac(content_stored, macKey)
+		if err != nil {
+			return err
+		}
+
+		// header_stored, err := loadDatastore(headerUUID)
+		// if err != nil {
+		// 	return err
+		// }
+
+	}
+	return nil
 }
 
 func (userdata *User) AppendToFile(filename string, content []byte) error {

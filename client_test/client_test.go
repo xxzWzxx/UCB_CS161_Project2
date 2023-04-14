@@ -223,7 +223,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 
 			userlib.DebugMsg("Tampering file content")
-			userUUID, err := client.GetContentUUID(alice.Username, aliceFile)
+			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
 			Expect(err).To(BeNil())
 			contentBytes, ok := userlib.DatastoreGet(userUUID)
 			Expect(ok).To(Equal(true))
@@ -330,7 +330,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 
 			userlib.DebugMsg("Tampering file content")
-			userUUID, err := client.GetContentUUID(alice.Username, aliceFile)
+			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
 			Expect(err).To(BeNil())
 			contentBytes, ok := userlib.DatastoreGet(userUUID)
 			Expect(ok).To(Equal(true))

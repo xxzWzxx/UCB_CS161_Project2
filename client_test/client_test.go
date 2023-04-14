@@ -245,7 +245,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 
 			userlib.DebugMsg("Tampering file header")
-			headerUUID, err := client.GetHeaderUUID(alice.Username, aliceFile)
+			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
 			Expect(err).To(BeNil())
 			contentBytes, ok := userlib.DatastoreGet(headerUUID)
 			Expect(ok).To(Equal(true))
@@ -308,7 +308,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 
 			userlib.DebugMsg("Tampering file header")
-			headerUUID, err := client.GetHeaderUUID(alice.Username, aliceFile)
+			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
 			Expect(err).To(BeNil())
 			contentBytes, ok := userlib.DatastoreGet(headerUUID)
 			Expect(ok).To(Equal(true))

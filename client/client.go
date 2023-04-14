@@ -408,9 +408,10 @@ func loadDatastore(key userlib.UUID) (value []byte, err error) {
 	return value, nil
 }
 
-func GetHeaderUUID(username string, filename string) (headerUUID userlib.UUID, err error) {
+func GetHeaderUUID(username string, hashFilename []byte) (headerUUID userlib.UUID, err error) {
 	// Creates a UUID deterministically, from a sequence of bytes.
-	hash := userlib.Hash([]byte("file-header/" + username))
+	tag := fmt.Sprintf("file-header/%v/%s", hashFilename, username)
+	hash := userlib.Hash([]byte(tag))
 	headerUUID, err = uuid.FromBytes(hash[:16])
 	if err != nil {
 		err = errors.New("An error occurred while generating file header UUID: " + err.Error())
@@ -429,16 +430,27 @@ func GetContentUUID(username string, hashFilename []byte, part int) (contentUUID
 	return contentUUID, err
 }
 
+func GetLocationUUID(username string, hashFilename []byte) (locationUUID userlib.UUID, err error) {
+	// Creates a UUID deterministically, from a sequence of bytes.
+	tag := fmt.Sprintf("file-location/%v/%s", hashFilename, username)
+	hash := userlib.Hash([]byte(tag))
+	locationUUID, err = uuid.FromBytes(hash[:16])
+	if err != nil {
+		err = errors.New("An error occurred while generating file location UUID: " + err.Error())
+	}
+	return locationUUID, err
+}
+
 type fileHeader struct {
 	HashFileName   []byte       // Hash value of the file name
 	Owner          bool         // Indicate whether the owner of this header is the owner of source file
 	SourceHeader   userlib.UUID // File header of the source of current header
 	ShareWith      []string     // Username the file is shared with
 	SourceUserName string       // Username of the owner of source header
-	Parts          int          // The number of parts of the file content
+	// Parts          int          // The number of parts of the file content
 }
 
-func findContentUUIDs(headerptr *fileHeader) (contentUUIDs []userlib.UUID, err error) {
+func findContentLocations(headerptr *fileHeader, macKey []byte) (locations []userlib.UUID, err error) {
 	currentHeader := *headerptr
 	for {
 		if currentHeader.Owner {
@@ -462,28 +474,32 @@ func findContentUUIDs(headerptr *fileHeader) (contentUUIDs []userlib.UUID, err e
 			return nil, err
 		}
 	}
-	for i := 0; i < currentHeader.Parts; i++ {
-		headerUUID, err := GetContentUUID(currentHeader.SourceUserName, currentHeader.HashFileName, i)
-		if err != nil {
-			return nil, err
-		}
-		contentUUIDs = append(contentUUIDs, headerUUID)
+	locationUUID := currentHeader.SourceHeader
+	mac_locationBytes, err := loadDatastore(locationUUID)
+	if err != nil {
+		return nil, err
 	}
-
-	return contentUUIDs, nil
+	err = AuthenticateMac(mac_locationBytes, macKey)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(mac_locationBytes[macLength:], &locations)
+	if err != nil {
+		return nil, err
+	}
+	return locations, nil
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	var (
-		encKey       []byte
-		macKey       []byte
-		header       fileHeader
-		headerUUID   userlib.UUID
-		contentUUIDs []userlib.UUID
+		encKey     []byte
+		macKey     []byte
+		header     fileHeader
+		headerUUID userlib.UUID
 	)
 
-	// Generate header UUID
-	headerUUID, err = GetHeaderUUID(userdata.Username, filename)
+	// Generate UUIDs
+	headerUUID, err = GetHeaderUUID(userdata.Username, userlib.Hash([]byte(filename)))
 	if err != nil {
 		return err
 	}
@@ -515,10 +531,14 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		// Create header
 		header.HashFileName = userlib.Hash([]byte(filename))
 		header.Owner = true
-		header.SourceHeader = uuid.Nil
+		locationUUID, err := GetLocationUUID(userdata.Username, userlib.Hash([]byte(filename)))
+		if err != nil {
+			return err
+		}
+		header.SourceHeader = locationUUID
 		header.ShareWith = make([]string, 0)
 		header.SourceUserName = userdata.Username
-		header.Parts = 1
+
 	} else {
 		encKey, _ = userdata.EncKeys[filename]
 		macKey, _ = userdata.MacKeys[filename]
@@ -539,12 +559,12 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 
 		// If the current user is not the owner of the file, find the true content UUID
-		contentUUIDs, err = findContentUUIDs(&header)
+		location, err := findContentLocations(&header, macKey)
 		if err != nil {
 			return err
 		}
 		// Authenticate the content stored
-		for _, contentUUID := range contentUUIDs {
+		for _, contentUUID := range location {
 			content_stored, err := loadDatastore(contentUUID)
 			if err != nil {
 				return err
@@ -556,21 +576,37 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 			// Delete the content previously stored
 			userlib.DatastoreDelete(contentUUID)
 		}
-		// Change the header to store new file
-		header.Parts = 1
 	}
 	// Get the contentUUID
 	contentUUID, err := GetContentUUID(userdata.Username, header.HashFileName, 0)
+	if err != nil {
+		return err
+	}
+	locationUUID, err := GetLocationUUID(userdata.Username, userlib.Hash([]byte(filename)))
+	if err != nil {
+		return err
+	}
 
 	// Encrypt then authenticate the file content, store it to Datastore
 	mac_cipher, err := encThenMac(content, encKey, macKey)
 	if err != nil {
 		return err
 	}
-	// msg := fmt.Sprintf("Storage: MAC key is %v, Encryption key is %v", macKey, encKey)
-	// userlib.DebugMsg(msg)
 	userlib.DatastoreSet(contentUUID, mac_cipher)
-	// userlib.DebugMsg("Storage: Content UUID is " + contentUUID.String())
+
+	// Store the location
+	var location []userlib.UUID
+	location = append(location, contentUUID)
+	locationBytes, err := json.Marshal(location)
+	if err != nil {
+		return err
+	}
+	mac, err := userlib.HMACEval(macKey, locationBytes)
+	if err != nil {
+		return nil
+	}
+	mac_locationBytes := append(mac, locationBytes...)
+	userlib.DatastoreSet(locationUUID, mac_locationBytes)
 
 	// Store the file header to Datastore
 	headerBytes, err := json.Marshal(header)
@@ -589,19 +625,24 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 
 func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 	var (
-		header       fileHeader
-		headerUUID   userlib.UUID
-		contentUUIDs []userlib.UUID
+		header     fileHeader
+		headerUUID userlib.UUID
+		locations  []userlib.UUID
 	)
-	headerUUID, err = GetHeaderUUID(userdata.Username, filename)
+	macKey, ok := userdata.MacKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while loading file: the file does not exist.")
+		return nil, err
+	}
+
+	headerUUID, err = GetHeaderUUID(userdata.Username, userlib.Hash([]byte(filename)))
 	verifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
 	if !ok {
 		return nil, err
 	}
 
-	sig_headerBytes, ok := userlib.DatastoreGet(headerUUID)
-	if !ok {
-		err = errors.New("An error occurred while loading file: cannot get file due to some malicious actions.")
+	sig_headerBytes, err := loadDatastore(headerUUID)
+	if err != nil {
 		return nil, err
 	}
 	err = VerifySig(sig_headerBytes, verifyKey)
@@ -613,25 +654,19 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 		return nil, err
 	}
 
-	contentUUIDs, err = findContentUUIDs(&header)
+	locations, err = findContentLocations(&header, macKey)
 	// userlib.DebugMsg("Load: Content UUID is " + contentUUID.String())
 	if err != nil {
 		return nil, err
 	}
-	for _, contentUUID := range contentUUIDs {
-		mac_cipher, ok := userlib.DatastoreGet(contentUUID)
-		if !ok {
-			err = errors.New("An error occurred while loading file: cannot get file due to some malicious actions.")
-			return nil, err
-		}
-		macKey, ok := userdata.MacKeys[filename]
-		if !ok {
-			err = errors.New("An error occurred while loading file: the file does not exist.")
+	for _, contentUUID := range locations {
+		mac_cipher, err := loadDatastore(contentUUID)
+		if err != nil {
 			return nil, err
 		}
 		err = AuthenticateMac(mac_cipher, macKey)
 		if err != nil {
-			return
+			return nil, err
 		}
 		cipher := mac_cipher[macLength:]
 		content = append(content, userlib.SymDec(userdata.EncKeys[filename], cipher)...)

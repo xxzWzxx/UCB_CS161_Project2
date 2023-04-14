@@ -447,7 +447,6 @@ type fileHeader struct {
 	SourceHeader   userlib.UUID // File header of the source of current header
 	ShareWith      []string     // Username the file is shared with
 	SourceUserName string       // Username of the owner of source header
-	// Parts          int          // The number of parts of the file content
 }
 
 func findContentLocations(headerptr *fileHeader, macKey []byte) (locationUUID userlib.UUID, locations []userlib.UUID, err error) {
@@ -490,7 +489,38 @@ func findContentLocations(headerptr *fileHeader, macKey []byte) (locationUUID us
 	return locationUUID, locations, nil
 }
 
+func (userdata *User) SyncUser() (err error) {
+	var newState User
+	structMacKey := userdata.structMacKey
+	structEncKey := userdata.structEncKey
+	userUUID, err := GetUserUUID(userdata.Username)
+	if err != nil {
+		return err
+	}
+	mac_userStruct, err := loadDatastore(userUUID)
+	if err != nil {
+		return err
+	}
+	err = AuthenticateMac(mac_userStruct, structMacKey)
+	if err != nil {
+		return err
+	}
+	cipherStruct := mac_userStruct[macLength:]
+	userStructBytes := userlib.SymDec(structEncKey, cipherStruct)
+	err = json.Unmarshal(userStructBytes, &newState)
+	if err != nil {
+		return err
+	}
+	userdata.MacKeys = newState.MacKeys
+	userdata.EncKeys = newState.EncKeys
+	return err
+}
+
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
+	err = userdata.SyncUser()
+	if err != nil {
+		err = errors.New("An error occurred while updating user structure: " + err.Error())
+	}
 	var (
 		encKey     []byte
 		macKey     []byte
@@ -527,6 +557,21 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 		userdata.EncKeys[filename] = encKey
 		userdata.MacKeys[filename] = macKey
+
+		// Store the new user structure
+		userStructBytes, err := json.Marshal(userdata)
+		if err != nil {
+			return err
+		}
+		mac_value_pair, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
+		if err != nil {
+			return err
+		}
+		userUUID, err := GetUserUUID(userdata.Username)
+		if err != nil {
+			return err
+		}
+		userlib.DatastoreSet(userUUID, mac_value_pair)
 
 		// Create and store the header
 		header.HashFileName = userlib.Hash([]byte(filename))
@@ -632,6 +677,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		mac_locationBytes := append(mac, locationBytes...)
 		userlib.DatastoreSet(locationUUID, mac_locationBytes)
 	}
+
 	return nil
 }
 
@@ -644,13 +690,20 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 		headerUUID userlib.UUID
 		location   []userlib.UUID
 	)
+	err = userdata.SyncUser()
+	if err != nil {
+		err = errors.New("An error occurred while updating user structure: " + err.Error())
+	}
 
 	// Generate macKey and encKey
 	encKey, ok := userdata.EncKeys[filename]
 	if !ok {
 		err = errors.New("An error occurred while appending to file: the file does not exist.")
 	}
-	macKey, _ = userdata.MacKeys[filename]
+	macKey, ok = userdata.MacKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while appending to file: the file does not exist.")
+	}
 
 	// Get the header file
 	headerUUID, err = GetHeaderUUID(userdata.Username, userlib.Hash([]byte(filename)))
@@ -708,6 +761,10 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 }
 
 func (userdata *User) LoadFile(filename string) (content []byte, err error) {
+	err = userdata.SyncUser()
+	if err != nil {
+		err = errors.New("An error occurred while updating user structure: " + err.Error())
+	}
 	var (
 		header     fileHeader
 		headerUUID userlib.UUID
@@ -739,7 +796,6 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 	}
 
 	_, locations, err = findContentLocations(&header, macKey)
-	// userlib.DebugMsg("Load: Content UUID is " + contentUUID.String())
 	if err != nil {
 		return nil, err
 	}

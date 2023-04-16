@@ -120,84 +120,6 @@ var _ = Describe("Client Tests", func() {
 			Expect(sameFields).To(Equal(true))
 		})
 
-		Specify("Edge Test: Testing InitUser/GetUser on a single user with zero length password.", func() {
-			userlib.DebugMsg("Initializing user Alice with empty password.")
-			alice, err = client.InitUser("alice", emptyString)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Getting user Alice with empty password.")
-			aliceLaptop, err = client.GetUser("alice", emptyString)
-			Expect(err).To(BeNil())
-		})
-
-		Specify("Edge Test: Testing empty username for InitUser.", func() {
-			userlib.DebugMsg("Initializing user with empty username.")
-			alice, err = client.InitUser(emptyString, defaultPassword)
-			Expect(err).To(Equal(errors.New("An error occurred when creating user: Empty username is provided.")))
-		})
-
-		Specify("Edge Test: Testing existing username for InitUser.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Create another user Alice with the same username.")
-			_, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(Equal(errors.New("An error occurred when creating user: The username already exists.")))
-		})
-
-		Specify("Baic Test: Testing wrong password for GetUser.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Providing wrong password to login in as Alice.")
-			aliceLaptop, err = client.GetUser("alice", defaultPassword+"1")
-			Expect(err).To(Equal(errors.New("An error occurred while login: password incorrect.")))
-		})
-
-		Specify("Edge Test: Testing uninitialized user for GetUser.", func() {
-			userlib.DebugMsg("Trying to login with uninitialized user alice.")
-			aliceLaptop, err = client.GetUser("alice", defaultPassword)
-			Expect(err).To(Equal(errors.New("An error occurred while login: The user is not initialized.")))
-		})
-
-		Specify("Edge Test: Testing tampered identity structure.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Tampering Alice's identity without generate new signature.")
-			identityUUID, err := client.GetIdentityUUID("alice")
-			Expect(err).To(BeNil())
-			identityBytes, ok := userlib.DatastoreGet(identityUUID)
-			Expect(ok).To(Equal(true))
-			identityBytes[len(identityBytes)/2] = identityBytes[len(identityBytes)/2] + 1
-			userlib.DatastoreSet(identityUUID, identityBytes)
-
-			userlib.DebugMsg("Trying to login after tampering Alice's identity.")
-			aliceLaptop, err = client.GetUser("alice", defaultPassword)
-			Expect(err).To(Equal(errors.New("An error occurred while verifying data: the data is tampered.")))
-		})
-
-		Specify("Edge Test: Testing tampered user structure.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Tampering Alice's user structure without generate new MAC.")
-			userUUID, err := client.GetUserUUID("alice")
-			Expect(err).To(BeNil())
-			userBytes, ok := userlib.DatastoreGet(userUUID)
-			Expect(ok).To(Equal(true))
-			userBytes[len(userBytes)/2] = userBytes[len(userBytes)/2] + 1
-			userlib.DatastoreSet(userUUID, userBytes)
-
-			userlib.DebugMsg("Trying to login with after tampering Alice's user structure.")
-			aliceLaptop, err = client.GetUser("alice", defaultPassword)
-			Expect(err).To(Equal(errors.New("An error occurred while authenticating the data: the data is tampered.")))
-		})
-
 		Specify("Basic Test: Testing Single User Store/Load file.", func() {
 			userlib.DebugMsg("Initializing user Alice.")
 			alice, err = client.InitUser("alice", defaultPassword)
@@ -211,69 +133,6 @@ var _ = Describe("Client Tests", func() {
 			data, err := alice.LoadFile(aliceFile)
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne)))
-		})
-
-		Specify("Edge Test: Testing Single User StoreFile after tampering file content.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Tampering file content")
-			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(userUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(userUUID, contentBytes)
-
-			userlib.DebugMsg("Trying to store the file.")
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(Equal(errors.New("An error occurred while authenticating the data: the data is tampered.")))
-		})
-
-		Specify("Edge Test: Testing Single User StoreFile after tampering file header.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Tampering file header")
-			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(headerUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(headerUUID, contentBytes)
-
-			userlib.DebugMsg("Trying to store the file.")
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(Equal(errors.New("An error occurred while verifying data: the data is tampered.")))
-		})
-
-		Specify("Basic Test: Testing StoreFile to an existing file.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentTwo)
-			err = alice.StoreFile(aliceFile, []byte(contentTwo))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Loading file...")
-			data, err := alice.LoadFile(aliceFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentTwo)))
 		})
 
 		Specify("Basic Test: Testing Single User with Multiple Devices StoreFile.", func() {
@@ -296,64 +155,6 @@ var _ = Describe("Client Tests", func() {
 			data, err := alice.LoadFile(aliceFile)
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentTwo)))
-		})
-
-		Specify("Edge Test: Testing Single User LoadFile after tampering header.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Tampering file header")
-			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(headerUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(headerUUID, contentBytes)
-
-			userlib.DebugMsg("Trying to store the file.")
-			_, err = alice.LoadFile(aliceFile)
-			Expect(err).To(Equal(errors.New("An error occurred while verifying data: the data is tampered.")))
-		})
-
-		Specify("Edge Test: Testing Single User LoadFile after tampering file content.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Tampering file content")
-			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(userUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(userUUID, contentBytes)
-
-			userlib.DebugMsg("Trying to store the file.")
-			_, err = alice.LoadFile(aliceFile)
-			Expect(err).To(Equal(errors.New("An error occurred while authenticating the data: the data is tampered.")))
-		})
-
-		Specify("Basic Test: Testing LoadFile when the file does not exist", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Loading file...")
-			_, err := alice.LoadFile(bobFile)
-			Expect(err).To(Equal(errors.New("An error occurred while loading file: the file does not exist.")))
 		})
 
 		Specify("Basic Test: Single user with multiple devices Store/Load.", func() {
@@ -551,4 +352,222 @@ var _ = Describe("Client Tests", func() {
 		})
 
 	})
+
+	Describe("Edge Tests", func() {
+		Specify("Edge Test: Testing InitUser/GetUser on a single user with zero length password.", func() {
+			userlib.DebugMsg("Initializing user Alice with empty password.")
+			alice, err = client.InitUser("alice", emptyString)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Getting user Alice with empty password.")
+			aliceLaptop, err = client.GetUser("alice", emptyString)
+			Expect(err).To(BeNil())
+		})
+
+		Specify("Edge Test: Testing empty username for InitUser.", func() {
+			userlib.DebugMsg("Initializing user with empty username.")
+			alice, err = client.InitUser(emptyString, defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred when creating user: Empty username is provided.")))
+		})
+
+		Specify("Edge Test: Testing existing username for InitUser.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Create another user Alice with the same username.")
+			_, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred when creating user: The username already exists.")))
+		})
+
+		Specify("Edge Test: Testing uninitialized user for GetUser.", func() {
+			userlib.DebugMsg("Trying to login with uninitialized user alice.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred while login: The user is not initialized.")))
+		})
+
+		Specify("Edge Test: Testing wrong password for GetUser.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Providing wrong password to login in as Alice.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword+"1")
+			Expect(err).To(Equal(errors.New("An error occurred while login: password incorrect.")))
+		})
+
+		Specify("Edge Test: Testing StoreFile to an existing file.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentTwo)
+			err = alice.StoreFile(aliceFile, []byte(contentTwo))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Loading file...")
+			data, err := alice.LoadFile(aliceFile)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentTwo)))
+		})
+
+		Specify("Edge Test: Testing LoadFile while the file does not exist", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Loading file...")
+			_, err := alice.LoadFile(bobFile)
+			Expect(err).To(Equal(errors.New("An error occurred while loading file: the file does not exist.")))
+		})
+
+		Specify("Edge Test: Testing AppendToFile while the filename does not exist in caller's namespace.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Store bobFile.txt to Alice name space.")
+			err = alice.StoreFile(bobFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Try to append to aliceFile.txt which does not exist.")
+			err = alice.AppendToFile(aliceFile, []byte(contentThree))
+			Expect(err).To(Equal(errors.New("An error occurred while appending to file: the file does not exist.")))
+		})
+	})
+
+	Describe("Security Tests", func() {
+		Specify("Security Test: Testing Single user GetUser after tampering  identity structure.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering Alice's identity without generate new signature.")
+			identityUUID, err := client.GetIdentityUUID("alice")
+			Expect(err).To(BeNil())
+			identityBytes, ok := userlib.DatastoreGet(identityUUID)
+			Expect(ok).To(Equal(true))
+			identityBytes[len(identityBytes)/2] = identityBytes[len(identityBytes)/2] + 1
+			userlib.DatastoreSet(identityUUID, identityBytes)
+
+			userlib.DebugMsg("Trying to login after tampering Alice's identity.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred while verifying data: the data is tampered.")))
+		})
+
+		Specify("Security Test: Testing Single user GetUser after tampering user structure.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering Alice's user structure without generate new MAC.")
+			userUUID, err := client.GetUserUUID("alice")
+			Expect(err).To(BeNil())
+			userBytes, ok := userlib.DatastoreGet(userUUID)
+			Expect(ok).To(Equal(true))
+			userBytes[len(userBytes)/2] = userBytes[len(userBytes)/2] + 1
+			userlib.DatastoreSet(userUUID, userBytes)
+
+			userlib.DebugMsg("Trying to login with after tampering Alice's user structure.")
+			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			Expect(err).To(Equal(errors.New("An error occurred while authenticating the data: the data is tampered.")))
+		})
+
+		Specify("Security Test: Testing Single User StoreFile after tampering file content.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering file content")
+			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
+			Expect(err).To(BeNil())
+			contentBytes, ok := userlib.DatastoreGet(userUUID)
+			Expect(ok).To(Equal(true))
+			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+			userlib.DatastoreSet(userUUID, contentBytes)
+
+			userlib.DebugMsg("Trying to store the file.")
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(Equal(errors.New("An error occurred while authenticating the data: the data is tampered.")))
+		})
+
+		Specify("Security Test: Testing Single User StoreFile after tampering file header.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering file header")
+			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
+			Expect(err).To(BeNil())
+			contentBytes, ok := userlib.DatastoreGet(headerUUID)
+			Expect(ok).To(Equal(true))
+			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+			userlib.DatastoreSet(headerUUID, contentBytes)
+
+			userlib.DebugMsg("Trying to store the file.")
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(Equal(errors.New("An error occurred while verifying data: the data is tampered.")))
+		})
+
+		Specify("Security Test: Testing Single User LoadFile after tampering header.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering file header")
+			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
+			Expect(err).To(BeNil())
+			contentBytes, ok := userlib.DatastoreGet(headerUUID)
+			Expect(ok).To(Equal(true))
+			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+			userlib.DatastoreSet(headerUUID, contentBytes)
+
+			userlib.DebugMsg("Trying to store the file.")
+			_, err = alice.LoadFile(aliceFile)
+			Expect(err).To(Equal(errors.New("An error occurred while verifying data: the data is tampered.")))
+		})
+
+		Specify("Security Test: Testing Single User LoadFile after tampering file content.", func() {
+			userlib.DebugMsg("Initializing user Alice.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Storing file data: %s", contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Tampering file content")
+			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
+			Expect(err).To(BeNil())
+			contentBytes, ok := userlib.DatastoreGet(userUUID)
+			Expect(ok).To(Equal(true))
+			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+			userlib.DatastoreSet(userUUID, contentBytes)
+
+			userlib.DebugMsg("Trying to store the file.")
+			_, err = alice.LoadFile(aliceFile)
+			Expect(err).To(Equal(errors.New("An error occurred while authenticating the data: the data is tampered.")))
+		})
+	})
+
 })

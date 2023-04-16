@@ -558,7 +558,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		userdata.EncKeys[filename] = encKey
 		userdata.MacKeys[filename] = macKey
 
-		// Store the new user structure
+		// Store the updated user structure
 		userStructBytes, err := json.Marshal(userdata)
 		if err != nil {
 			return err
@@ -588,6 +588,9 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 			return err
 		}
 		sig_header, err := getSignedMsg(headerBytes, userdata.SignKey)
+		if err != nil {
+			return err
+		}
 		userlib.DatastoreSet(headerUUID, sig_header)
 
 		// Store the content
@@ -693,16 +696,19 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	err = userdata.SyncUser()
 	if err != nil {
 		err = errors.New("An error occurred while updating user structure: " + err.Error())
+		return err
 	}
 
 	// Generate macKey and encKey
 	encKey, ok := userdata.EncKeys[filename]
 	if !ok {
 		err = errors.New("An error occurred while appending to file: the file does not exist.")
+		return err
 	}
 	macKey, ok = userdata.MacKeys[filename]
 	if !ok {
 		err = errors.New("An error occurred while appending to file: the file does not exist.")
+		return err
 	}
 
 	// Get the header file
@@ -815,12 +821,183 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 	return content, nil
 }
 
-func (userdata *User) CreateInvitation(filename string, recipientUsername string) (
-	invitationPtr uuid.UUID, err error) {
-	return
+type Invitation struct {
+	EncKey []byte
+	MacKey []byte
+	Source userlib.UUID
+}
+
+func GetInvitationUUID(username string, hashFilename []byte) (invitationUUID userlib.UUID, err error) {
+	// Creates a UUID deterministically, from a sequence of bytes.
+	tag := fmt.Sprintf("file-invitation/%v/%s", hashFilename, username)
+	hash := userlib.Hash([]byte(tag))
+	invitationUUID, err = uuid.FromBytes(hash[:16])
+	if err != nil {
+		err = errors.New("An error occurred while generating invitation UUID: " + err.Error())
+	}
+	return invitationUUID, err
+}
+
+func (userdata *User) CreateInvitation(filename string, recipientUsername string) (invitationPtr uuid.UUID, err error) {
+	var (
+		invitation Invitation
+		ok         bool
+		headerUUID userlib.UUID
+		header     fileHeader
+	)
+	// Update the user session
+	userdata.SyncUser()
+
+	// Create the invitation
+	invitation.EncKey, ok = userdata.EncKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while creating invitation: the file does not exist.")
+		return uuid.Nil, err
+	}
+	invitation.MacKey, ok = userdata.MacKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while creating invitation: the file does not exist.")
+		return uuid.Nil, err
+	}
+	invitation.Source, err = GetHeaderUUID(userdata.Username, userlib.Hash([]byte(filename)))
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	// Generate the uuid of invitation and store it to Datastore
+	invitationPtr, err = GetInvitationUUID(userdata.Username, []byte(filename))
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// Encrypt the invitation with the recipient's public key
+	encKey, ok := userlib.KeystoreGet(getPEKeyName(recipientUsername))
+	if !ok {
+		err = errors.New("An error occurred while creating invitation: the recipient does not exist.")
+		return uuid.Nil, err
+	}
+	invitationBytes, err := json.Marshal(invitation)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	cipher, err := userlib.PKEEnc(encKey, invitationBytes)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	sig_cipher, err := getSignedMsg(cipher, userdata.SignKey)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	userlib.DatastoreSet(invitationPtr, sig_cipher)
+
+	// Update the user ShareWith list in the fileheader
+	headerUUID, err = GetHeaderUUID(userdata.Username, userlib.Hash([]byte(filename)))
+	verifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+	if !ok {
+		return uuid.Nil, err
+	}
+	sig_headerBytes, err := loadDatastore(headerUUID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	err = VerifySig(sig_headerBytes, verifyKey)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	err = json.Unmarshal(sig_headerBytes[sigLength:], &header)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	header.ShareWith = append(header.ShareWith, recipientUsername)
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	sig_headerBytes, err = getSignedMsg(headerBytes, userdata.SignKey)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	userlib.DatastoreSet(headerUUID, sig_headerBytes)
+
+	return invitationPtr, nil
 }
 
 func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid.UUID, filename string) error {
+	var (
+		invitation Invitation
+		err        error
+		ok         bool
+		header     fileHeader
+	)
+
+	// Check whether the filename exists
+	_, ok = userdata.EncKeys[filename]
+	if ok {
+		err = errors.New("An error occurred while accepting invitation: the file already exists.")
+		return err
+	}
+
+	// Verify and decrypt the invitation
+	sig_cipher, ok := userlib.DatastoreGet(invitationPtr)
+	if !ok {
+		err = errors.New("An error occurred while accepting invittion: the invitation does not exist.")
+		return err
+	}
+	verifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(senderUsername))
+	if !ok {
+		err = errors.New("An error occurred while accepting invitation: the sender's user name is invalid.")
+		return err
+	}
+	err = VerifySig(sig_cipher, verifyKey)
+	if err != nil {
+		return err
+	}
+	invitationBytes, err := userlib.PKEDec(userdata.PrivateDecKey, sig_cipher[sigLength:])
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(invitationBytes, &invitation)
+	if err != nil {
+		return err
+	}
+
+	// Store the new keys into user structure
+	userdata.EncKeys[filename] = invitation.EncKey
+	userdata.MacKeys[filename] = invitation.MacKey
+	// Store the update user structure
+	userStructBytes, err := json.Marshal(userdata)
+	if err != nil {
+		return err
+	}
+	mac_value_pair, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
+	if err != nil {
+		return err
+	}
+	userUUID, err := GetUserUUID(userdata.Username)
+	if err != nil {
+		return err
+	}
+	userlib.DatastoreSet(userUUID, mac_value_pair)
+
+	// Create a new header and store it
+	header.HashFileName = userlib.Hash([]byte(filename))
+	header.Owner = false
+	header.SourceHeader = invitation.Source
+	header.ShareWith = make([]string, 0)
+	header.SourceUserName = senderUsername
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+	sig_header, err := getSignedMsg(headerBytes, userdata.SignKey)
+	if err != nil {
+		return err
+	}
+	headerUUID, err := GetHeaderUUID(userdata.Username, header.HashFileName)
+	if err != nil {
+		return err
+	}
+	userlib.DatastoreSet(headerUUID, sig_header)
+
 	return nil
 }
 

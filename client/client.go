@@ -475,44 +475,45 @@ type fileHeader struct {
 	SourceUserName string       // Username of the owner of source header
 }
 
-func findContentLocations(headerptr *fileHeader, macKey []byte) (locationUUID userlib.UUID, locations []userlib.UUID, err error) {
+func findContentLocations(headerptr *fileHeader, macKey []byte) (locationUUID userlib.UUID, sourceHeader userlib.UUID, locations []userlib.UUID, err error) {
 	currentHeader := *headerptr
 	for {
 		if currentHeader.Owner {
 			break
 		}
-		sig_nextHeader, err := loadDatastore(currentHeader.SourceHeader)
+		sourceHeader = currentHeader.SourceHeader
+		sig_nextHeader, err := loadDatastore(sourceHeader)
 		if err != nil {
-			return uuid.Nil, nil, err
+			return uuid.Nil, uuid.Nil, nil, err
 		}
 		verificationKey, ok := userlib.KeystoreGet(getVerifyKeyName(currentHeader.SourceUserName))
 		if !ok {
 			err = errors.New("An error occurred while login: The user is not initialized.")
-			return uuid.Nil, nil, err
+			return uuid.Nil, uuid.Nil, nil, err
 		}
 		err = VerifySig(sig_nextHeader, verificationKey)
 		if err != nil {
-			return uuid.Nil, nil, err
+			return uuid.Nil, uuid.Nil, nil, err
 		}
 		err = json.Unmarshal(sig_nextHeader[sigLength:], &currentHeader)
 		if err != nil {
-			return uuid.Nil, nil, err
+			return uuid.Nil, uuid.Nil, nil, err
 		}
 	}
 	locationUUID = currentHeader.SourceHeader
 	mac_locationBytes, err := loadDatastore(locationUUID)
 	if err != nil {
-		return uuid.Nil, nil, err
+		return uuid.Nil, uuid.Nil, nil, err
 	}
 	err = AuthenticateMac(mac_locationBytes, macKey)
 	if err != nil {
-		return uuid.Nil, nil, err
+		return uuid.Nil, uuid.Nil, nil, err
 	}
 	err = json.Unmarshal(mac_locationBytes[macLength:], &locations)
 	if err != nil {
-		return uuid.Nil, nil, err
+		return uuid.Nil, uuid.Nil, nil, err
 	}
-	return locationUUID, locations, nil
+	return locationUUID, sourceHeader, locations, nil
 }
 
 func (userdata *User) SyncUser() (err error) {
@@ -644,36 +645,35 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		mac_locationBytes := append(mac, locationBytes...)
 		userlib.DatastoreSet(locationUUID, mac_locationBytes)
 
-		// Update the source table
-		sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
-		if err != nil {
-			return err
-		}
-		sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
-		if err != nil {
-			return err
-		}
-		verifyKey, _ := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
-		err = VerifySig(sig_sourceTableBytes, verifyKey)
-		if err != nil {
-			return err
-		}
-		var sourceTable map[userlib.UUID]userlib.UUID
-		err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
-		if err != nil {
-			return err
-		}
-		sourceTable[locationUUID] = headerUUID
-		sourceTableBytes, err := json.Marshal(sourceTable)
-		if err != nil {
-			return err
-		}
-		sig_sourceTableBytes, err = getSignedMsg(sourceTableBytes, userdata.SignKey)
-		if err != nil {
-			return err
-		}
-
-		userlib.DatastoreSet(sourceTableUUID, sig_sourceTableBytes)
+		// // Update the source table
+		// sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
+		// if err != nil {
+		// 	return err
+		// }
+		// sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
+		// if err != nil {
+		// 	return err
+		// }
+		// verifyKey, _ := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+		// err = VerifySig(sig_sourceTableBytes, verifyKey)
+		// if err != nil {
+		// 	return err
+		// }
+		// var sourceTable map[userlib.UUID]userlib.UUID
+		// err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
+		// if err != nil {
+		// 	return err
+		// }
+		// sourceTable[locationUUID] = headerUUID
+		// sourceTableBytes, err := json.Marshal(sourceTable)
+		// if err != nil {
+		// 	return err
+		// }
+		// sig_sourceTableBytes, err = getSignedMsg(sourceTableBytes, userdata.SignKey)
+		// if err != nil {
+		// 	return err
+		// }
+		// userlib.DatastoreSet(sourceTableUUID, sig_sourceTableBytes)
 
 	} else {
 		encKey, _ = userdata.EncKeys[filename]
@@ -695,7 +695,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 
 		// If the current user is not the owner of the file, find the true content UUID
-		locationUUID, location, err := findContentLocations(&header, macKey)
+		locationUUID, _, location, err := findContentLocations(&header, macKey)
 		if err != nil {
 			return err
 		}
@@ -792,7 +792,7 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	}
 
 	// Get the locations of the file content
-	locationUUID, location, err := findContentLocations(&header, macKey)
+	locationUUID, _, location, err := findContentLocations(&header, macKey)
 	if err != nil {
 		return err
 	}
@@ -859,7 +859,7 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 		return nil, err
 	}
 
-	_, locations, err = findContentLocations(&header, macKey)
+	_, _, locations, err = findContentLocations(&header, macKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1078,8 +1078,11 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	if err != nil {
 		return err
 	}
-	locationUUID, _, err := findContentLocations(&header, userdata.MacKeys[filename])
-	sourceTable[locationUUID] = headerUUID
+	_, sourceHeader, _, err := findContentLocations(&header, userdata.MacKeys[filename])
+	if err != nil {
+		return err
+	}
+	sourceTable[sourceHeader] = headerUUID
 	sourceTableBytes, err := json.Marshal(sourceTable)
 	if err != nil {
 		return err
@@ -1165,7 +1168,7 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	random_bytes := userlib.RandomBytes(userlib.AESKeySizeBytes)
 	newEncKey, err = generateSymKey(userdata.sourceKey, append([]byte(userdata.Username+filename+"Enc"), random_bytes...), userlib.AESKeySizeBytes)
 	newMacKey, err = generateSymKey(userdata.sourceKey, append([]byte(userdata.Username+filename+"Mac"), random_bytes...), userlib.AESKeySizeBytes)
-	_, locations, err := findContentLocations(&header, oldMacKey)
+	_, _, locations, err := findContentLocations(&header, oldMacKey)
 	if err != nil {
 		return err
 	}
@@ -1206,12 +1209,12 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 
 	// Create update information to the user who still have access to the file
 	var sharedUser []string
-	err = findSharedUsers(&header, header.SourceHeader, &sharedUser)
+	err = findSharedUsers(&header, headerUUID, &sharedUser)
 	userlib.DebugMsg("The shared users are: %v", sharedUser)
 
 	// Create update information to all of the shared users
 	for _, username := range sharedUser {
-		updateUUID, err := GetUpdateUUID(username, header.SourceHeader)
+		updateUUID, err := GetUpdateUUID(username, headerUUID)
 		if err != nil {
 			return err
 		}
@@ -1219,7 +1222,7 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 		var update Invitation
 		update.EncKey = newEncKey
 		update.MacKey = newMacKey
-		update.Source = header.SourceHeader
+		update.Source = headerUUID
 		// Store the updates to Datastore
 		encKey, ok := userlib.KeystoreGet(getPEKeyName(username))
 		if !ok {
@@ -1234,12 +1237,17 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 		if err != nil {
 			return err
 		}
-		sig_cipher, err := 
+		sig_cipher, err := getSignedMsg(cipher, userdata.SignKey)
+		if err != nil {
+			return err
+		}
+		userlib.DatastoreSet(updateUUID, sig_cipher)
 	}
+
 	return nil
 }
 
-func findSharedUsers(rootHeader *fileHeader, source userlib.UUID, sharedUser *[]string) (err error) {
+func findSharedUsers(rootHeader *fileHeader, sourceHeader userlib.UUID, sharedUser *[]string) (err error) {
 	shareWith := rootHeader.ShareWith
 	if len(shareWith) == 0 {
 		return nil
@@ -1267,7 +1275,7 @@ func findSharedUsers(rootHeader *fileHeader, source userlib.UUID, sharedUser *[]
 				return err
 			}
 			// Get next user's headerUUID
-			headerUUID, ok := sourceTable[source]
+			headerUUID, ok := sourceTable[sourceHeader]
 			if !ok {
 				err = errors.New("An error occurred while finding shared users: cannot find the next header UUID.")
 			}
@@ -1285,7 +1293,7 @@ func findSharedUsers(rootHeader *fileHeader, source userlib.UUID, sharedUser *[]
 			if err != nil {
 				return err
 			}
-			err = findSharedUsers(&header, source, sharedUser)
+			err = findSharedUsers(&header, sourceHeader, sharedUser)
 			if err != nil {
 				return err
 			}
@@ -1294,13 +1302,12 @@ func findSharedUsers(rootHeader *fileHeader, source userlib.UUID, sharedUser *[]
 	return nil
 }
 
-func GetUpdateUUID(username string, source userlib.UUID) (updateUUID userlib.UUID, err error) {
-	tag := fmt.Sprintf("user-update/%s/%v", username, source)
+func GetUpdateUUID(username string, sourceHeader userlib.UUID) (updateUUID userlib.UUID, err error) {
+	tag := fmt.Sprintf("user-update/%s/%v", username, sourceHeader)
 	hash := userlib.Hash([]byte(tag))
 	updateUUID, err = uuid.FromBytes(hash[:16])
 	if err != nil {
 		err = errors.New("An error occurred while generating updates UUID: " + err.Error())
-		break
 	}
 	return updateUUID, err
 }

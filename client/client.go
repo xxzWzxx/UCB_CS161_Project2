@@ -975,6 +975,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 		return uuid.Nil, err
 	}
 	userlib.DatastoreSet(headerUUID, sig_headerBytes)
+	// userlib.DebugMsg("After creating the invitation, share with: %v", header.ShareWith)
 
 	return invitationPtr, nil
 }
@@ -1189,11 +1190,126 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	// Save the new keys
 	userdata.EncKeys[filename] = newEncKey
 	userdata.MacKeys[filename] = newMacKey
+	userStructBytes, err := json.Marshal(userdata)
+	if err != nil {
+		return err
+	}
+	mac_cipher, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
+	if err != nil {
+		return err
+	}
+	userUUID, err := GetUserUUID(userdata.Username)
+	if err != nil {
+		return err
+	}
+	userlib.DatastoreSet(userUUID, mac_cipher)
 
 	// Create update information to the user who still have access to the file
-	// for _, username := range header.ShareWith {
+	var sharedUser []string
+	err = findSharedUsers(&header, header.SourceHeader, &sharedUser)
+	userlib.DebugMsg("The shared users are: %v", sharedUser)
 
-	// }
-
+	// Create update information to all of the shared users
+	for _, username := range sharedUser {
+		updateUUID, err := GetUpdateUUID(username)
+		if err != nil {
+			return err
+		}
+		// Create the updates, which has the same fields as invitation
+		var update Invitation
+		update.EncKey = newEncKey
+		update.MacKey = newMacKey
+		update.Source = header.SourceHeader
+		// Store the updates to Datastore
+		encKey, ok := userlib.KeystoreGet(getPEKeyName(username))
+		if !ok {
+			err = errors.New("An error occurred while creating invitation: the recipient does not exist.")
+			return err
+		}
+		updateBytes, err := json.Marshal(update)
+		if err != nil{
+			return err
+		}
+		cipher, err := userlib.PKEEnc(encKey, updateBytes)
+		if err != nil{
+			return err
+		}
+		// 用什么确保integrity？？？
+		sig_cipher, err := 
+	}
 	return nil
+}
+
+func findSharedUsers(rootHeader *fileHeader, source userlib.UUID, sharedUser *[]string) (err error) {
+	shareWith := rootHeader.ShareWith
+	if len(shareWith) == 0 {
+		return nil
+	} else {
+		for _, username := range shareWith {
+			*sharedUser = append(*sharedUser, username)
+			// Get the next user's verify key
+			verifyKey, _ := userlib.KeystoreGet(getVerifyKeyName(username))
+			// Get the next user's source table
+			sourceTableUUID, err := GetSourceTableUUID(username)
+			if err != nil {
+				return err
+			}
+			sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
+			if err != nil {
+				return err
+			}
+			err = VerifySig(sig_sourceTableBytes, verifyKey)
+			if err != nil {
+				return err
+			}
+			var sourceTable map[userlib.UUID]userlib.UUID
+			err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
+			if err != nil {
+				return err
+			}
+			// Get next user's headerUUID
+			headerUUID, ok := sourceTable[source]
+			if !ok {
+				err = errors.New("An error occurred while finding shared users: cannot find the next header UUID.")
+			}
+			// Get the next header
+			sig_headerBytes, err := loadDatastore(headerUUID)
+			if err != nil {
+				return err
+			}
+			err = VerifySig(sig_headerBytes, verifyKey)
+			if err != nil {
+				return err
+			}
+			var header fileHeader
+			err = json.Unmarshal(sig_headerBytes[sigLength:], &header)
+			if err != nil {
+				return err
+			}
+			err = findSharedUsers(&header, source, sharedUser)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func GetUpdateUUID(username string) (updateUUID userlib.UUID, err error) {
+	i := 0
+	for {
+		tag := fmt.Sprintf("user-update/%s/%d", username, i)
+		hash := userlib.Hash([]byte(tag))
+		updateUUID, err = uuid.FromBytes(hash[:16])
+		if err != nil {
+			err = errors.New("An error occurred while generating updates UUID: " + err.Error())
+			break
+		}
+		_, ok := userlib.DatastoreGet(updateUUID)
+		if !ok {
+			break
+		}
+		i++
+	}
+	return updateUUID, err
 }

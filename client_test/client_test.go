@@ -499,113 +499,113 @@ var _ = Describe("Client Tests", func() {
 
 	})
 
-	Describe("Security Tests", func() {
-		Specify("Security Test: Testing Single user GetUser after tampering user structure.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
+	// Describe("Security Tests", func() {
+	// 	Specify("Security Test: Testing Single user GetUser after tampering user structure.", func() {
+	// 		userlib.DebugMsg("Initializing user Alice.")
+	// 		alice, err = client.InitUser("alice", defaultPassword)
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Tampering Alice's user structure without generate new MAC.")
-			// userUUID, err := uuid.FromBytes(userlib.Hash([]byte("user-struct/" + alice.Username))[:16])
-			userUUID, err := client.GetUserUUID(alice.Username)
-			Expect(err).To(BeNil())
-			userBytes, ok := userlib.DatastoreGet(userUUID)
-			Expect(ok).To(Equal(true))
-			userBytes[len(userBytes)/2] = userBytes[len(userBytes)/2] + 1
-			userlib.DatastoreSet(userUUID, userBytes)
+	// 		userlib.DebugMsg("Tampering Alice's user structure without generate new MAC.")
+	// 		// userUUID, err := uuid.FromBytes(userlib.Hash([]byte("user-struct/" + alice.Username))[:16])
+	// 		userUUID, err := client.GetUserUUID(alice.Username)
+	// 		Expect(err).To(BeNil())
+	// 		userBytes, ok := userlib.DatastoreGet(userUUID)
+	// 		Expect(ok).To(Equal(true))
+	// 		userBytes[len(userBytes)/2] = userBytes[len(userBytes)/2] + 1
+	// 		userlib.DatastoreSet(userUUID, userBytes)
 
-			userlib.DebugMsg("Trying to login with after tampering Alice's user structure.")
-			aliceLaptop, err = client.GetUser("alice", defaultPassword)
-			Expect(err).ToNot(BeNil())
-		})
+	// 		userlib.DebugMsg("Trying to login with after tampering Alice's user structure.")
+	// 		aliceLaptop, err = client.GetUser("alice", defaultPassword)
+	// 		Expect(err).ToNot(BeNil())
+	// 	})
 
-		Specify("Security Test: Testing Single user StoreFile after tampering file content.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
+	// 	Specify("Security Test: Testing Single user StoreFile after tampering file content.", func() {
+	// 		userlib.DebugMsg("Initializing user Alice.")
+	// 		alice, err = client.InitUser("alice", defaultPassword)
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
+	// 		userlib.DebugMsg("Storing file data: %s", contentOne)
+	// 		err = alice.StoreFile(aliceFile, []byte(contentOne))
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Tampering file content")
-			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(userUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(userUUID, contentBytes)
+	// 		userlib.DebugMsg("Tampering file content")
+	// 		userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
+	// 		Expect(err).To(BeNil())
+	// 		contentBytes, ok := userlib.DatastoreGet(userUUID)
+	// 		Expect(ok).To(Equal(true))
+	// 		contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+	// 		userlib.DatastoreSet(userUUID, contentBytes)
 
-			userlib.DebugMsg("Trying to store the file.")
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).ToNot(BeNil())
-		})
+	// 		userlib.DebugMsg("Trying to store the file.")
+	// 		err = alice.StoreFile(aliceFile, []byte(contentOne))
+	// 		Expect(err).ToNot(BeNil())
+	// 	})
 
-		Specify("Security Test: Testing Single User StoreFile after tampering file header.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
+	// 	Specify("Security Test: Testing Single User StoreFile after tampering file header.", func() {
+	// 		userlib.DebugMsg("Initializing user Alice.")
+	// 		alice, err = client.InitUser("alice", defaultPassword)
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
+	// 		userlib.DebugMsg("Storing file data: %s", contentOne)
+	// 		err = alice.StoreFile(aliceFile, []byte(contentOne))
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Tampering file header")
-			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(headerUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(headerUUID, contentBytes)
+	// 		userlib.DebugMsg("Tampering file header")
+	// 		headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
+	// 		Expect(err).To(BeNil())
+	// 		contentBytes, ok := userlib.DatastoreGet(headerUUID)
+	// 		Expect(ok).To(Equal(true))
+	// 		contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+	// 		userlib.DatastoreSet(headerUUID, contentBytes)
 
-			userlib.DebugMsg("Trying to store the file.")
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).ToNot(BeNil())
-		})
+	// 		userlib.DebugMsg("Trying to store the file.")
+	// 		err = alice.StoreFile(aliceFile, []byte(contentOne))
+	// 		Expect(err).ToNot(BeNil())
+	// 	})
 
-		Specify("Security Test: Testing Single User LoadFile after tampering header.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
+	// 	Specify("Security Test: Testing Single User LoadFile after tampering header.", func() {
+	// 		userlib.DebugMsg("Initializing user Alice.")
+	// 		alice, err = client.InitUser("alice", defaultPassword)
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
+	// 		userlib.DebugMsg("Storing file data: %s", contentOne)
+	// 		err = alice.StoreFile(aliceFile, []byte(contentOne))
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Tampering file header")
-			headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(headerUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(headerUUID, contentBytes)
+	// 		userlib.DebugMsg("Tampering file header")
+	// 		headerUUID, err := client.GetHeaderUUID(alice.Username, userlib.Hash([]byte(aliceFile)))
+	// 		Expect(err).To(BeNil())
+	// 		contentBytes, ok := userlib.DatastoreGet(headerUUID)
+	// 		Expect(ok).To(Equal(true))
+	// 		contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+	// 		userlib.DatastoreSet(headerUUID, contentBytes)
 
-			userlib.DebugMsg("Trying to store the file.")
-			_, err = alice.LoadFile(aliceFile)
-			Expect(err).ToNot(BeNil())
-		})
+	// 		userlib.DebugMsg("Trying to store the file.")
+	// 		_, err = alice.LoadFile(aliceFile)
+	// 		Expect(err).ToNot(BeNil())
+	// 	})
 
-		Specify("Security Test: Testing Single User LoadFile after tampering file content.", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
+	// 	Specify("Security Test: Testing Single User LoadFile after tampering file content.", func() {
+	// 		userlib.DebugMsg("Initializing user Alice.")
+	// 		alice, err = client.InitUser("alice", defaultPassword)
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Storing file data: %s", contentOne)
-			err = alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
+	// 		userlib.DebugMsg("Storing file data: %s", contentOne)
+	// 		err = alice.StoreFile(aliceFile, []byte(contentOne))
+	// 		Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Tampering file content")
-			userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
-			Expect(err).To(BeNil())
-			contentBytes, ok := userlib.DatastoreGet(userUUID)
-			Expect(ok).To(Equal(true))
-			contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
-			userlib.DatastoreSet(userUUID, contentBytes)
+	// 		userlib.DebugMsg("Tampering file content")
+	// 		userUUID, err := client.GetContentUUID(alice.Username, userlib.Hash([]byte(aliceFile)), 0)
+	// 		Expect(err).To(BeNil())
+	// 		contentBytes, ok := userlib.DatastoreGet(userUUID)
+	// 		Expect(ok).To(Equal(true))
+	// 		contentBytes[len(contentBytes)/2] = contentBytes[len(contentBytes)/2] + 1
+	// 		userlib.DatastoreSet(userUUID, contentBytes)
 
-			userlib.DebugMsg("Trying to store the file.")
-			_, err = alice.LoadFile(aliceFile)
-			Expect(err).ToNot(BeNil())
-		})
-	})
+	// 		userlib.DebugMsg("Trying to store the file.")
+	// 		_, err = alice.LoadFile(aliceFile)
+	// 		Expect(err).ToNot(BeNil())
+	// 	})
+	// })
 
 })

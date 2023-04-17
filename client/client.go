@@ -1055,9 +1055,40 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 		return err
 	}
 	userlib.DatastoreSet(headerUUID, sig_header)
-
 	// Delete the invitation once it is accepted
 	userlib.DatastoreDelete(invitationPtr)
+
+	// Update the source table
+	sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
+	if err != nil {
+		return err
+	}
+	sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
+	if err != nil {
+		return err
+	}
+	verifyKey, _ = userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+	err = VerifySig(sig_sourceTableBytes, verifyKey)
+	if err != nil {
+		return err
+	}
+	var sourceTable map[userlib.UUID]userlib.UUID
+	err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
+	if err != nil {
+		return err
+	}
+	locationUUID, _, err := findContentLocations(&header, userdata.MacKeys[filename])
+	sourceTable[locationUUID] = headerUUID
+	sourceTableBytes, err := json.Marshal(sourceTable)
+	if err != nil {
+		return err
+	}
+	sig_sourceTableBytes, err = getSignedMsg(sourceTableBytes, userdata.SignKey)
+	if err != nil {
+		return err
+	}
+	userlib.DatastoreSet(sourceTableUUID, sig_sourceTableBytes)
+
 	return nil
 }
 

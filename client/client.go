@@ -123,8 +123,8 @@ type Identity struct {
 	Salt        []byte
 }
 
-func generateSymKey(sourceKey []byte, purpose string, keySize int) (newKey []byte, err error) {
-	newKey, err = userlib.HashKDF(sourceKey, []byte(purpose))
+func generateSymKey(sourceKey []byte, purpose []byte, keySize int) (newKey []byte, err error) {
+	newKey, err = userlib.HashKDF(sourceKey, purpose)
 	if err != nil {
 		err = errors.New("An error occurred while generating a new symmetric key: " + err.Error())
 		return nil, err
@@ -170,11 +170,11 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.Username = username
 	salt := userlib.RandomBytes(userlib.AESKeySizeBytes)
 	userdata.sourceKey = userlib.Argon2Key([]byte(password), salt, userlib.AESKeySizeBytes)
-	userdata.structEncKey, err = generateSymKey(userdata.sourceKey, "structEncKey", userlib.AESKeySizeBytes)
+	userdata.structEncKey, err = generateSymKey(userdata.sourceKey, []byte("structEncKey"), userlib.AESKeySizeBytes)
 	if err != nil {
 		return nil, err
 	}
-	userdata.structMacKey, err = generateSymKey(userdata.sourceKey, "structMacKey", userlib.AESKeySizeBytes)
+	userdata.structMacKey, err = generateSymKey(userdata.sourceKey, []byte("structMacKey"), userlib.AESKeySizeBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +229,22 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 		return nil, err
 	}
 	userlib.DatastoreSet(userUUID, mac_value_pair)
+
+	// Initialize and store empty source table
+	sourceTable := make(map[userlib.UUID]userlib.UUID)
+	sourceTableBytes, err := json.Marshal(sourceTable)
+	if err != nil {
+		return nil, err
+	}
+	sig_sourceTableBytes, err := getSignedMsg(sourceTableBytes, userdata.SignKey)
+	if err != nil {
+		return nil, err
+	}
+	sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
+	if err != nil {
+		return nil, err
+	}
+	userlib.DatastoreSet(sourceTableUUID, sig_sourceTableBytes)
 
 	return &userdata, nil
 }
@@ -331,11 +347,11 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		err = errors.New("An error occurred while login: password incorrect.")
 		return nil, err
 	}
-	structEncKey, err := generateSymKey(sourceKey, "structEncKey", userlib.AESKeySizeBytes)
+	structEncKey, err := generateSymKey(sourceKey, []byte("structEncKey"), userlib.AESKeySizeBytes)
 	if err != nil {
 		return nil, err
 	}
-	structMacKey, err := generateSymKey(sourceKey, "structMacKey", userlib.AESKeySizeBytes)
+	structMacKey, err := generateSymKey(sourceKey, []byte("structMacKey"), userlib.AESKeySizeBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -439,6 +455,16 @@ func GetLocationUUID(username string, hashFilename []byte) (locationUUID userlib
 		err = errors.New("An error occurred while generating file location UUID: " + err.Error())
 	}
 	return locationUUID, err
+}
+
+func GetSourceTableUUID(username string) (sourceTableUUID userlib.UUID, err error) {
+	// Creates a UUID deterministically, from a sequence of bytes.
+	hash := userlib.Hash([]byte("user-filesource/" + username))
+	sourceTableUUID, err = uuid.FromBytes(hash[:16])
+	if err != nil {
+		err = errors.New("An error occurred while generating source table UUID: " + err.Error())
+	}
+	return sourceTableUUID, err
 }
 
 type fileHeader struct {
@@ -547,11 +573,11 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		if err != nil {
 			return err
 		}
-		encKey, err = generateSymKey(userdata.sourceKey, userdata.Username+filename+"Enc", userlib.AESKeySizeBytes)
+		encKey, err = generateSymKey(userdata.sourceKey, []byte(userdata.Username+filename+"Enc"), userlib.AESKeySizeBytes)
 		if err != nil {
 			return err
 		}
-		macKey, err = generateSymKey(userdata.sourceKey, userdata.Username+filename+"MAC", userlib.AESKeySizeBytes)
+		macKey, err = generateSymKey(userdata.sourceKey, []byte(userdata.Username+filename+"MAC"), userlib.AESKeySizeBytes)
 		if err != nil {
 			return err
 		}
@@ -613,10 +639,42 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 		mac, err := userlib.HMACEval(macKey, locationBytes)
 		if err != nil {
-			return nil
+			return err
 		}
 		mac_locationBytes := append(mac, locationBytes...)
 		userlib.DatastoreSet(locationUUID, mac_locationBytes)
+
+		// Update the source table
+		sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
+		if err != nil {
+			return err
+		}
+		sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
+		if err != nil {
+			return err
+		}
+		verifyKey, _ := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+		err = VerifySig(sig_sourceTableBytes, verifyKey)
+		if err != nil {
+			return err
+		}
+		var sourceTable map[userlib.UUID]userlib.UUID
+		err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
+		if err != nil {
+			return err
+		}
+		sourceTable[locationUUID] = headerUUID
+		sourceTableBytes, err := json.Marshal(sourceTable)
+		if err != nil {
+			return err
+		}
+		sig_sourceTableBytes, err = getSignedMsg(sourceTableBytes, userdata.SignKey)
+		if err != nil {
+			return err
+		}
+
+		userlib.DatastoreSet(sourceTableUUID, sig_sourceTableBytes)
+
 	} else {
 		encKey, _ = userdata.EncKeys[filename]
 		macKey, _ = userdata.MacKeys[filename]
@@ -865,7 +923,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 	}
 
 	// Generate the uuid of invitation and store it to Datastore
-	invitationPtr, err = GetInvitationUUID(userdata.Username, []byte(filename))
+	invitationPtr, err = GetInvitationUUID(userdata.Username, userlib.Hash([]byte(filename)))
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -998,9 +1056,113 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	}
 	userlib.DatastoreSet(headerUUID, sig_header)
 
+	// Delete the invitation once it is accepted
+	userlib.DatastoreDelete(invitationPtr)
 	return nil
 }
 
 func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+	userdata.SyncUser()
+
+	var (
+		ok        bool
+		err       error
+		oldEncKey []byte
+		oldMacKey []byte
+		newEncKey []byte
+		newMacKey []byte
+		header    fileHeader
+	)
+
+	// Check whether the filename exists
+	oldEncKey, ok = userdata.EncKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while revoking access: the file does not exist.")
+		return err
+	}
+	oldMacKey, ok = userdata.MacKeys[filename]
+	if !ok {
+		err = errors.New("An error occurred while revoking access: the file does not exist.")
+		return err
+	}
+
+	// Check whether the user is shared with the file.
+	headerUUID, err := GetHeaderUUID(userdata.Username, userlib.Hash([]byte(filename)))
+	verifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+	if !ok {
+		return err
+	}
+	sig_headerBytes, err := loadDatastore(headerUUID)
+	if err != nil {
+		return err
+	}
+	err = VerifySig(sig_headerBytes, verifyKey)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(sig_headerBytes[sigLength:], &header)
+	if err != nil {
+		return err
+	}
+	have_access := false
+	idx := 0
+	for _, shareUser := range header.ShareWith {
+		if shareUser == recipientUsername {
+			have_access = true
+			break
+		}
+		idx++
+	}
+	if !have_access {
+		err = errors.New("An error occurred while revoking access: the file is not shared with recipient.")
+		return err
+	}
+	// Delete the recipient from the ShareWith list
+	header.ShareWith = append(header.ShareWith[:idx], header.ShareWith[idx+1:]...)
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+	sig_header, err := getSignedMsg(headerBytes, userdata.SignKey)
+	if err != nil {
+		return err
+	}
+	userlib.DatastoreSet(headerUUID, sig_header)
+
+	// Encrypt and authenticate the file content with new encryption and MAC key
+	random_bytes := userlib.RandomBytes(userlib.AESKeySizeBytes)
+	newEncKey, err = generateSymKey(userdata.sourceKey, append([]byte(userdata.Username+filename+"Enc"), random_bytes...), userlib.AESKeySizeBytes)
+	newMacKey, err = generateSymKey(userdata.sourceKey, append([]byte(userdata.Username+filename+"Mac"), random_bytes...), userlib.AESKeySizeBytes)
+	_, locations, err := findContentLocations(&header, oldMacKey)
+	if err != nil {
+		return err
+	}
+	for _, contentUUID := range locations {
+		mac_cipher, err := loadDatastore(contentUUID)
+		if err != nil {
+			return err
+		}
+		err = AuthenticateMac(mac_cipher, oldMacKey)
+		if err != nil {
+			return err
+		}
+		content := userlib.SymDec(oldEncKey, mac_cipher[macLength:])
+		// Encrypt and authenticate with new keys
+		new_mac_cipher, err := encThenMac(content, newEncKey, newMacKey)
+		if err != nil {
+			return err
+		}
+		userlib.DatastoreSet(contentUUID, new_mac_cipher)
+	}
+
+	// Save the new keys
+	userdata.EncKeys[filename] = newEncKey
+	userdata.MacKeys[filename] = newMacKey
+
+	// Create update information to the user who still have access to the file
+	// for _, username := range header.ShareWith {
+
+	// }
+
 	return nil
 }

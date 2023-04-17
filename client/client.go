@@ -1211,7 +1211,7 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 
 	// Create update information to all of the shared users
 	for _, username := range sharedUser {
-		updateUUID, err := GetUpdateUUID(username)
+		updateUUID, err := GetUpdateUUID(username, header.SourceHeader)
 		if err != nil {
 			return err
 		}
@@ -1227,14 +1227,13 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 			return err
 		}
 		updateBytes, err := json.Marshal(update)
-		if err != nil{
+		if err != nil {
 			return err
 		}
 		cipher, err := userlib.PKEEnc(encKey, updateBytes)
-		if err != nil{
+		if err != nil {
 			return err
 		}
-		// 用什么确保integrity？？？
 		sig_cipher, err := 
 	}
 	return nil
@@ -1295,21 +1294,13 @@ func findSharedUsers(rootHeader *fileHeader, source userlib.UUID, sharedUser *[]
 	return nil
 }
 
-func GetUpdateUUID(username string) (updateUUID userlib.UUID, err error) {
-	i := 0
-	for {
-		tag := fmt.Sprintf("user-update/%s/%d", username, i)
-		hash := userlib.Hash([]byte(tag))
-		updateUUID, err = uuid.FromBytes(hash[:16])
-		if err != nil {
-			err = errors.New("An error occurred while generating updates UUID: " + err.Error())
-			break
-		}
-		_, ok := userlib.DatastoreGet(updateUUID)
-		if !ok {
-			break
-		}
-		i++
+func GetUpdateUUID(username string, source userlib.UUID) (updateUUID userlib.UUID, err error) {
+	tag := fmt.Sprintf("user-update/%s/%v", username, source)
+	hash := userlib.Hash([]byte(tag))
+	updateUUID, err = uuid.FromBytes(hash[:16])
+	if err != nil {
+		err = errors.New("An error occurred while generating updates UUID: " + err.Error())
+		break
 	}
 	return updateUUID, err
 }

@@ -116,6 +116,7 @@ type User struct {
 	MacKeys       map[string][]byte
 	SignKey       userlib.DSSignKey
 	PrivateDecKey userlib.PKEDecKey
+	FilenameMap   map[userlib.UUID]string
 }
 
 type Identity struct {
@@ -188,6 +189,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	}
 	userdata.EncKeys = make(map[string][]byte)
 	userdata.MacKeys = make(map[string][]byte)
+	userdata.FilenameMap = make(map[uuid.UUID]string)
 
 	// Create identity structure
 	userIdentity.IdentityKey, err = userlib.HashKDF(userdata.sourceKey, []byte("identityKey"))
@@ -516,7 +518,131 @@ func findContentLocations(headerptr *fileHeader, macKey []byte) (locationUUID us
 	return locationUUID, sourceHeader, locations, nil
 }
 
+func findSourceUsername(headerptr *fileHeader) (sourceUsername string, err error) {
+	currentHeader := *headerptr
+	for {
+		if currentHeader.Owner {
+			break
+		}
+		sourceHeader := currentHeader.SourceHeader
+		sig_nextHeader, err := loadDatastore(sourceHeader)
+		if err != nil {
+			return sourceUsername, err
+		}
+		verificationKey, ok := userlib.KeystoreGet(getVerifyKeyName(currentHeader.SourceUserName))
+		if !ok {
+			err = errors.New("An error occurred while login: The user is not initialized.")
+			return sourceUsername, err
+		}
+		err = VerifySig(sig_nextHeader, verificationKey)
+		if err != nil {
+			return sourceUsername, err
+		}
+		err = json.Unmarshal(sig_nextHeader[sigLength:], &currentHeader)
+		if err != nil {
+			return sourceUsername, err
+		}
+	}
+	sourceUsername = currentHeader.SourceUserName
+	return sourceUsername, nil
+}
+
 func (userdata *User) SyncUser() (err error) {
+	// Check the updates
+	// 1. Load the source table
+	sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
+	if err != nil {
+		return err
+	}
+	sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
+	if err != nil {
+		return err
+	}
+	verifyKey, _ := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
+	err = VerifySig(sig_sourceTableBytes, verifyKey)
+	if err != nil {
+		return err
+	}
+	var sourceTable map[userlib.UUID]userlib.UUID
+	err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
+	if err != nil {
+		return err
+	}
+	// Receive updates from every source
+	var (
+		header fileHeader
+		update Invitation
+	)
+	for sourceHeaderUUID, headerUUID := range sourceTable {
+		// Get the update
+		updateUUID, err := GetUpdateUUID(userdata.Username, sourceHeaderUUID)
+		if err != nil {
+			return err
+		}
+		sig_cipher, ok := userlib.DatastoreGet(updateUUID)
+		if !ok {
+			continue
+		}
+
+		// Get the sender's verification key
+		// 1. Find the sender's username
+		sig_headerBytes, err := loadDatastore(headerUUID)
+		if err != nil {
+			return err
+		}
+		err = VerifySig(sig_headerBytes, verifyKey)
+		if err != nil {
+			return err
+		}
+		err = json.Unmarshal(sig_headerBytes[sigLength:], &header)
+		if err != nil {
+			return err
+		}
+		senderUsername, err := findSourceUsername(&header)
+		if err != nil {
+			return err
+		}
+		// 2. Get the verification key
+		senderVerifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(senderUsername))
+		if !ok {
+			err = errors.New("An error occurred while updating user's key: cannot verify the update information.")
+			return err
+		}
+
+		// Verify the update and decrypt it
+		err = VerifySig(sig_cipher, senderVerifyKey)
+		if err != nil {
+			return err
+		}
+		updateBytes, err := userlib.PKEDec(userdata.PrivateDecKey, sig_cipher[sigLength:])
+		if err != nil {
+			err = errors.New("An error occurred while updating the keys: fail to decrypt the update inforamtion.")
+			return err
+		}
+		err = json.Unmarshal(updateBytes, &update)
+		if err != nil {
+			return err
+		}
+		// userlib.DebugMsg("Update keys for %s", userdata.FilenameMap[headerUUID])
+		// userlib.DebugMsg("Old Encryption Key: %v; Old MAC Key: %v", userdata.EncKeys[userdata.FilenameMap[headerUUID]], userdata.MacKeys[userdata.FilenameMap[headerUUID]])
+		// userlib.DebugMsg("New Encryption Key: %v; New MAC Key: %v", update.EncKey, update.MacKey)
+		userdata.EncKeys[userdata.FilenameMap[headerUUID]] = update.EncKey
+		userdata.MacKeys[userdata.FilenameMap[headerUUID]] = update.MacKey
+		userStructBytes, err := json.Marshal(userdata)
+		if err != nil {
+			return err
+		}
+		mac_value_pair, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
+		if err != nil {
+			return err
+		}
+		userUUID, err := GetUserUUID(userdata.Username)
+		if err != nil {
+			return err
+		}
+		userlib.DatastoreSet(userUUID, mac_value_pair)
+	}
+
 	var newState User
 	structMacKey := userdata.structMacKey
 	structEncKey := userdata.structEncKey
@@ -540,7 +666,9 @@ func (userdata *User) SyncUser() (err error) {
 	}
 	userdata.MacKeys = newState.MacKeys
 	userdata.EncKeys = newState.EncKeys
-	return err
+	userdata.FilenameMap = newState.FilenameMap
+	// userlib.DebugMsg("After sync ---- New Encryption Key: %v; New MAC Key: %v", userdata.EncKeys, userdata.MacKeys)
+	return nil
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
@@ -584,6 +712,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 		userdata.EncKeys[filename] = encKey
 		userdata.MacKeys[filename] = macKey
+		userdata.FilenameMap[headerUUID] = filename
 
 		// Store the updated user structure
 		userStructBytes, err := json.Marshal(userdata)
@@ -644,36 +773,6 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		}
 		mac_locationBytes := append(mac, locationBytes...)
 		userlib.DatastoreSet(locationUUID, mac_locationBytes)
-
-		// // Update the source table
-		// sourceTableUUID, err := GetSourceTableUUID(userdata.Username)
-		// if err != nil {
-		// 	return err
-		// }
-		// sig_sourceTableBytes, err := loadDatastore(sourceTableUUID)
-		// if err != nil {
-		// 	return err
-		// }
-		// verifyKey, _ := userlib.KeystoreGet(getVerifyKeyName(userdata.Username))
-		// err = VerifySig(sig_sourceTableBytes, verifyKey)
-		// if err != nil {
-		// 	return err
-		// }
-		// var sourceTable map[userlib.UUID]userlib.UUID
-		// err = json.Unmarshal(sig_sourceTableBytes[sigLength:], &sourceTable)
-		// if err != nil {
-		// 	return err
-		// }
-		// sourceTable[locationUUID] = headerUUID
-		// sourceTableBytes, err := json.Marshal(sourceTable)
-		// if err != nil {
-		// 	return err
-		// }
-		// sig_sourceTableBytes, err = getSignedMsg(sourceTableBytes, userdata.SignKey)
-		// if err != nil {
-		// 	return err
-		// }
-		// userlib.DatastoreSet(sourceTableUUID, sig_sourceTableBytes)
 
 	} else {
 		encKey, _ = userdata.EncKeys[filename]
@@ -835,6 +934,7 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 		locations  []userlib.UUID
 	)
 	macKey, ok := userdata.MacKeys[filename]
+	// userlib.DebugMsg("Loading file ---- the MAC Key is: %v", macKey)
 	if !ok {
 		err = errors.New("An error occurred while loading file: the file does not exist.")
 		return nil, err
@@ -1019,24 +1119,6 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 		return err
 	}
 
-	// Store the new keys into user structure
-	userdata.EncKeys[filename] = invitation.EncKey
-	userdata.MacKeys[filename] = invitation.MacKey
-	// Store the update user structure
-	userStructBytes, err := json.Marshal(userdata)
-	if err != nil {
-		return err
-	}
-	mac_value_pair, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
-	if err != nil {
-		return err
-	}
-	userUUID, err := GetUserUUID(userdata.Username)
-	if err != nil {
-		return err
-	}
-	userlib.DatastoreSet(userUUID, mac_value_pair)
-
 	// Create a new header and store it
 	header.HashFileName = userlib.Hash([]byte(filename))
 	header.Owner = false
@@ -1056,6 +1138,26 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 		return err
 	}
 	userlib.DatastoreSet(headerUUID, sig_header)
+
+	// Store the new keys into user structure
+	userdata.EncKeys[filename] = invitation.EncKey
+	userdata.MacKeys[filename] = invitation.MacKey
+	userdata.FilenameMap[headerUUID] = filename
+	// Store the update user structure
+	userStructBytes, err := json.Marshal(userdata)
+	if err != nil {
+		return err
+	}
+	mac_value_pair, err := encThenMac(userStructBytes, userdata.structEncKey, userdata.structMacKey)
+	if err != nil {
+		return err
+	}
+	userUUID, err := GetUserUUID(userdata.Username)
+	if err != nil {
+		return err
+	}
+	userlib.DatastoreSet(userUUID, mac_value_pair)
+
 	// Delete the invitation once it is accepted
 	userlib.DatastoreDelete(invitationPtr)
 
@@ -1168,7 +1270,7 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	random_bytes := userlib.RandomBytes(userlib.AESKeySizeBytes)
 	newEncKey, err = generateSymKey(userdata.sourceKey, append([]byte(userdata.Username+filename+"Enc"), random_bytes...), userlib.AESKeySizeBytes)
 	newMacKey, err = generateSymKey(userdata.sourceKey, append([]byte(userdata.Username+filename+"Mac"), random_bytes...), userlib.AESKeySizeBytes)
-	_, _, locations, err := findContentLocations(&header, oldMacKey)
+	locationUUID, _, locations, err := findContentLocations(&header, oldMacKey)
 	if err != nil {
 		return err
 	}
@@ -1182,6 +1284,7 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 			return err
 		}
 		content := userlib.SymDec(oldEncKey, mac_cipher[macLength:])
+		// userlib.DebugMsg("Revoke Access ---- the content is: %s", content)
 		// Encrypt and authenticate with new keys
 		new_mac_cipher, err := encThenMac(content, newEncKey, newMacKey)
 		if err != nil {
@@ -1193,6 +1296,8 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	// Save the new keys
 	userdata.EncKeys[filename] = newEncKey
 	userdata.MacKeys[filename] = newMacKey
+	// userlib.DebugMsg("Old Encryption Key: %v; Old MAC Key: %v", oldEncKey, oldMacKey)
+	// userlib.DebugMsg("After revoke ---- New Encryption Key: %v; New MAC Key: %v", newEncKey, newMacKey)
 	userStructBytes, err := json.Marshal(userdata)
 	if err != nil {
 		return err
@@ -1207,10 +1312,22 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	}
 	userlib.DatastoreSet(userUUID, mac_cipher)
 
+	// Use the new MAC key to generate new MAC for locations
+	locationBytes, err := json.Marshal(locations)
+	if err != nil {
+		return err
+	}
+	mac, err := userlib.HMACEval(newMacKey, locationBytes)
+	if err != nil {
+		return err
+	}
+	mac_locationBytes := append(mac, locationBytes...)
+	userlib.DatastoreSet(locationUUID, mac_locationBytes)
+
 	// Create update information to the user who still have access to the file
 	var sharedUser []string
 	err = findSharedUsers(&header, headerUUID, &sharedUser)
-	userlib.DebugMsg("The shared users are: %v", sharedUser)
+	// userlib.DebugMsg("The shared users are: %v", sharedUser)
 
 	// Create update information to all of the shared users
 	for _, username := range sharedUser {
@@ -1278,6 +1395,7 @@ func findSharedUsers(rootHeader *fileHeader, sourceHeader userlib.UUID, sharedUs
 			headerUUID, ok := sourceTable[sourceHeader]
 			if !ok {
 				err = errors.New("An error occurred while finding shared users: cannot find the next header UUID.")
+				return err
 			}
 			// Get the next header
 			sig_headerBytes, err := loadDatastore(headerUUID)

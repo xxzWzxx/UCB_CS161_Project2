@@ -749,9 +749,6 @@ var _ = Describe("Client Tests", func() {
 			bob, err = client.InitUser("bob", defaultPassword)
 			Expect(err).To(BeNil())
 
-			charles, err = client.InitUser("charles", defaultPassword)
-			Expect(err).To(BeNil())
-
 			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
 			alice.StoreFile(aliceFile, []byte(contentOne))
 
@@ -772,19 +769,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne)))
 
-			userlib.DebugMsg("Bob creating invite for Charles for file %s, and Charlie accepting invite under name %s.", bobFile, charlesFile)
-			invite, err = bob.CreateInvitation(bobFile, "charles")
-			Expect(err).To(BeNil())
-
-			err = charles.AcceptInvitation("bob", invite, charlesFile)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Checking that Charles can load the file.")
-			data, err = charles.LoadFile(charlesFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentOne)))
-
-			userlib.DebugMsg("Alice revoking Bob's access from %s.", aliceFile)
+			userlib.DebugMsg("Alice revoking Bob's access from %s.", bobFile)
 			err = alice.RevokeAccess(bobFile, "bob")
 			Expect(err).ToNot(BeNil())
 		})

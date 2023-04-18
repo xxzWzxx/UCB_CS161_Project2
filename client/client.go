@@ -1098,7 +1098,7 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	// Verify and decrypt the invitation
 	sig_cipher, ok := userlib.DatastoreGet(invitationPtr)
 	if !ok {
-		err = errors.New("An error occurred while accepting invittion: the invitation does not exist.")
+		err = errors.New("An error occurred while accepting invitaion: the invitation does not exist.")
 		return err
 	}
 	verifyKey, ok := userlib.KeystoreGet(getVerifyKeyName(senderUsername))
